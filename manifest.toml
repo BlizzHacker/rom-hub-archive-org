@@ -1,0 +1,20 @@
+[plugin]
+slug        = "archive-org"
+name        = "Archive.org"
+version     = "0.2.0"
+rpp_version = "1"
+license     = "MIT"
+
+[capabilities]
+search   = "archive_org.search:Search"
+importer = "archive_org.importer:Importer"
+metadata = "archive_org.metadata:Metadata"
+stream   = "archive_org.stream:Stream"
+
+[permissions]
+network  = ["archive.org", "*.archive.org"]
+romm_api = []
+
+[config]
+collections = { type = "list[str]", default = ["softwarelibrary"] }
+collection  = { type = "str", default = "Archive.org" }
