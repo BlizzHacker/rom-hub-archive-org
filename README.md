@@ -1,5 +1,8 @@
 # Archive.org plugin for ROM Hub
 
+A project of the [Move Weight Foundation](https://foundation.moveweight.com), a
+501(c)(3).
+
 Implements the RPP v1 `search` and `importer` capabilities:
 
 | Capability | Endpoint | Does |
