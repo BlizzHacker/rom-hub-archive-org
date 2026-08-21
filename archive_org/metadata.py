@@ -28,6 +28,13 @@ bare name. Archive.org filenames are user-supplied and frequently are not
 (spaces are fine, but `#`, `%` and non-Latin scripts all appear), so the
 extension is taken from the chosen file and the stem is always `cover`.
 Nothing about which bytes are fetched depends on it.
+
+**Controls travel with the game.** The same metadata call carries what
+Archive.org says about which key is which console button, and
+`controls.py` decides what of that is real enough to keep. It lands in
+`raw_metadata["raw_manual_metadata"]` -- and only when there is something
+to put there, because `MetadataPatch` reads an absent field as "leave the
+library alone" and an empty one as "replace what is there with nothing".
 """
 
 import json
@@ -35,6 +42,9 @@ import posixpath
 from urllib.parse import quote
 
 from rom_hub_sdk import MetadataPatch, MetadataProvider, RomRef
+
+from .controls import extract as extract_controls
+from .controls import patch_field
 
 METADATA = "https://archive.org/metadata/"
 DOWNLOAD = "https://archive.org/download/"
@@ -105,9 +115,18 @@ class Metadata(MetadataProvider):
             )
             patch["artwork_filename"] = f"cover.{_extension(cover['name'])}"
 
-        # An item with neither a title nor a cover yields an empty patch,
-        # which the host reads as "nothing to change" and acts on by
-        # leaving RomM alone. That is the correct outcome, not an error.
+        # How the game is controlled, when Archive.org says. `patch_field`
+        # answers `{}` when it does not, and an empty `raw_metadata` is
+        # what leaves the library's own blob untouched -- so this is
+        # never written speculatively.
+        raw = patch_field(extract_controls(metadata, identifier))
+        if raw:
+            patch["raw_metadata"] = raw
+
+        # An item with neither a title nor a cover nor controls yields an
+        # empty patch, which the host reads as "nothing to change" and
+        # acts on by leaving RomM alone. That is the correct outcome, not
+        # an error.
         return MetadataPatch(**patch)
 
     def _metadata(self, identifier: str) -> dict:

@@ -22,6 +22,9 @@ from urllib.parse import quote
 
 from rom_hub_sdk import SearchResult, StreamProvider, StreamTarget
 
+from .controls import extract as extract_controls
+from .platforms import platform_for
+
 METADATA = "https://archive.org/metadata/"
 DETAILS = "https://archive.org/details/"
 
@@ -67,18 +70,45 @@ class Stream(StreamProvider):
 
         collections = _as_list(metadata.get("collection"))
         title = metadata.get("title")
+
+        extra = {
+            "emulator": emulator.strip(),
+            # The operator's cue for why an item that will not import
+            # still turns up here.
+            "stream_only": "true" if STREAM_ONLY in collections else "false",
+            "identifier": identifier,
+        }
+
+        platform = platform_for(emulator)
+        if platform:
+            # Not required to stream -- the page plays it whatever it is --
+            # but a caller deciding between this and a local player wants
+            # to know which machine, in the library's own vocabulary.
+            extra["platform"] = platform
+
+        # A browser-bound player is exactly where a keyboard mapping
+        # matters most, so if Archive.org says which key is which button,
+        # it travels with the target. `controls.py` decides what counts.
+        controls = extract_controls(metadata, identifier)
+        if controls:
+            if "controller" in controls:
+                extra["controller"] = str(controls["controller"])
+            text = controls.get("instructions") or controls.get("notes") or ""
+            if text:
+                # `extra` is a flat string map and this is prose, so it is
+                # bounded here rather than shipped whole. The unabridged
+                # text goes through `metadata`, to whichever backend will
+                # keep a raw blob -- which RomM 4.9.2 will not, see
+                # `controls.patch_field`. So in practice this is the copy
+                # an operator actually reads today.
+                extra["controls"] = text[:1000]
+
         return StreamTarget(
             kind="url",
             target=DETAILS + quote(identifier, safe=""),
             mime_type="text/html",
             title=title if isinstance(title, str) and title.strip() else None,
-            extra={
-                "emulator": emulator.strip(),
-                # The operator's cue for why an item that will not import
-                # still turns up here.
-                "stream_only": "true" if STREAM_ONLY in collections else "false",
-                "identifier": identifier,
-            },
+            extra=extra,
         )
 
     def _metadata(self, identifier: str) -> dict:
