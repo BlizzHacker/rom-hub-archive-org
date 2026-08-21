@@ -326,7 +326,7 @@ verified live.
 
 ## Install
 
-    rom-hub plugin install https://github.com/<you>/rom-hub-archive-org --ref v0.3.0
+    rom-hub plugin install https://github.com/<you>/rom-hub-archive-org --ref v0.4.0
     rom-hub search sonic --platform genesis
     rom-hub import archive-org Sonic_The_Hedgehog_W_REV01_h1C
 
