@@ -107,7 +107,9 @@ class Importer(ImportProvider):
                 f"Archive.org item {identifier!r} is stream-only: it is in the "
                 f"'stream_only' collection, which means Archive.org permits "
                 f"playing it in a browser but not downloading it. It cannot be "
-                f"imported."
+                f"imported -- but it is not unplayable: this plugin's 'stream' "
+                f"capability resolves it to the page that plays it. Try "
+                f"'rom-hub stream archive-org {identifier} --open'."
             )
 
         # 2. Which platform? Never guessed -- see platforms.py.

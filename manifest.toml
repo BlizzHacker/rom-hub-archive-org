@@ -1,7 +1,7 @@
 [plugin]
 slug        = "archive-org"
 name        = "Archive.org"
-version     = "0.2.0"
+version     = "0.4.0"
 rpp_version = "1"
 license     = "MIT"
 
@@ -10,11 +10,19 @@ search   = "archive_org.search:Search"
 importer = "archive_org.importer:Importer"
 metadata = "archive_org.metadata:Metadata"
 stream   = "archive_org.stream:Stream"
+census   = "archive_org.census:Census"
 
 [permissions]
 network  = ["archive.org", "*.archive.org"]
 romm_api = []
 
 [config]
-collections = { type = "list[str]", default = ["softwarelibrary"] }
-collection  = { type = "str", default = "Archive.org" }
+collections       = { type = "list[str]", default = ["softwarelibrary", "consolelivingroom"] }
+collection        = { type = "str", default = "Archive.org" }
+downloadable_only = { type = "bool", default = false }
+max_rows          = { type = "int", default = 50000 }
+# One collection, not the search scope's list: a census partitions a
+# single collection by item_size and reconciles its windows against that
+# collection's own numFound. Two collections would need two partitions and
+# two denominators, and summing them would double-count every item in both.
+census_collection = { type = "str", default = "softwarelibrary" }
