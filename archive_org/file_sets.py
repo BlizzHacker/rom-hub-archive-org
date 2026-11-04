@@ -247,9 +247,19 @@ class FileSets:
         if not _payload(matched) or not archive.lower().endswith(".zip"):
             raise FileSetError(f"ZIP {archive!r} is not listed as downloadable "
                                f"in Archive.org item {identifier!r}")
-        url = DOWNLOAD + quote(identifier, safe="") + "/" + quote(archive, safe="/") + "/"
+        base = METADATA + quote(identifier, safe="")
+        server = _get(self.http, base + "/d1").get("result")
+        directory = _get(self.http, base + "/dir").get("result")
+        if (not isinstance(server, str)
+                or not re.fullmatch(r"ia[0-9]+\\.(?:us|ca)\\.archive\\.org", server)
+                or not isinstance(directory, str)
+                or not re.fullmatch(r"/[0-9]+/items/" + re.escape(identifier), directory)):
+            raise FileSetError(f"Archive.org item {identifier!r} has invalid storage host or directory")
+        url = ("https://" + server + "/view_archive.php?archive=" +
+               quote(directory + "/" + archive, safe="/"))
         try:
-            result = zip_members(self.http, url, max_entries=self.max_files)
+            result = zip_members(self.http, url, identifier, archive,
+                                 max_entries=self.max_files)
         except ZipListingError as exc:
             raise FileSetError(str(exc)) from exc
         self._zip_cache[key] = result
