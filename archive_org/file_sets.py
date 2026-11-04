@@ -56,7 +56,7 @@ class SetSource:
         identifier, _, prefix = path.partition("/")
         if (not separator or not _ITEM_ID.fullmatch(identifier)
                 or not _PLATFORM.fullmatch(platform)
-                or prefix.startswith("/") or prefix.endswith("/")
+                or path.endswith("/") or prefix.startswith("/") or prefix.endswith("/")
                 or any(segment in ("", ".", "..") for segment in prefix.split("/"))
                 or "\\" in prefix or any(ord(ch) < 32 for ch in prefix)):
             raise FileSetError(
@@ -97,6 +97,12 @@ def _payload(entry) -> bool:
     if not _valid_name(name):
         return False
     if not name.lower().endswith(PAYLOAD_SUFFIXES):
+        return False
+    # Reject names the ROM Hub downloader cannot safely write (reserved
+    # Windows devices, overlong names, forbidden characters) at search time.
+    try:
+        FetchFile(url="https://archive.org/", filename=posixpath.basename(name))
+    except (ValidationError, ValueError):
         return False
     return not any(str(entry.get(k, "")).lower() in ("true", "1", "yes")
                    for k in _BLOCKED)
@@ -248,7 +254,7 @@ class FileSets:
             raise FileSetError(f"{name!r} is not in a configured file set")
         source = max(choices, key=lambda s: len(s.prefix))
         entry = next((entry for entry in self._files(identifier)
-                      if entry.get("name") == name), None)
+                      if isinstance(entry, dict) and entry.get("name") == name), None)
         if not _payload(entry):
             raise FileSetError(f"{name!r} is no longer a downloadable file in {identifier!r}")
         url = DOWNLOAD + quote(identifier, safe="") + "/" + quote(name, safe="/")
