@@ -90,7 +90,7 @@ class Importer(ImportProvider):
         identifier = (result.source_id or "").strip()
         if not identifier:
             raise ImportRefused("the search result carries no Archive.org identifier")
-        if identifier.startswith("set:"):
+        if identifier.startswith(("set:", "zip:")):
             # File-set results are explicit item+filename references. The
             # planner revalidates the exact file against Archive.org before
             # returning a one-file direct HTTP plan.
