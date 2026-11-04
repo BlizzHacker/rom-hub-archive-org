@@ -346,10 +346,13 @@ and have permission to access. Archive.org's regular search indexes
 items, not every file inside arbitrary ZIPs, so set discovery requires
 the operator to name the sources.
 
-ZIP listings are retrieved with
-`https://archive.org/download/<item>/<archive>.zip/`. The plugin extracts
-same-host member links under the exact ZIP, and produces one search
-result per supported ROM payload. At grab time it revalidates the file and
+ZIP listings are retrieved from the item's canonical Archive.org
+storage host through `view_archive.php?archive=...`. The storage hostname
+and directory are discovered from the item's `metadata/{id}/d1` and
+`metadata/{id}/dir` fields; neither is hardcoded, and neither is
+accepted unless it matches an expected IA storage host and item path.
+The plugin extracts only canonical `archive.org/download/<item>/<zip>/<member>`
+links and produces one search result per supported ROM payload. At grab time it revalidates the file and
 returns an exact HTTP `FetchPlan`. Compatible single-disc CHDs or other
 images are retrieved individually; where an adjacent matching `.m3u`
 exists, the plan includes the playlist and all identically named, numbered
@@ -363,9 +366,11 @@ oversized listings; ZIPs without View Contents, 403-restricted listings
 and responses that exceed the host limit fail rather than silently
 claiming to have indexed the full set.
 
-**Authentication:** The current ROM Hub integration uses the host-side
-HTTP fetcher and downloader, not the Archive.org `ia` CLI. It does not
-read `ia.ini` or send account cookies. Public files need no credentials;
+**Authentication:** ROM Hub itself does not read `ia.ini`. The separate
+[dgmora/romarr auth feature PR](https://github.com/dgmora/romarr/pull/6)
+adds host-side, origin-scoped cookie transport for both search and
+downloads when ROMarr is explicitly given a SOPS-managed `ia.ini` path.
+The plugin subprocess never sees account credentials. Public files need no credentials;
 access-restricted resources might require a separate ROM Hub host-side
 authentication feature and may still be unavailable to your account.
 Never place credentials in `file_sets`, URLs, or the plugin manifest.
