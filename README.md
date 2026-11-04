@@ -366,14 +366,17 @@ oversized listings; ZIPs without View Contents, 403-restricted listings
 and responses that exceed the host limit fail rather than silently
 claiming to have indexed the full set.
 
-**Authentication:** ROM Hub itself does not read `ia.ini`. The separate
-[dgmora/romarr auth feature PR](https://github.com/dgmora/romarr/pull/6)
-adds host-side, origin-scoped cookie transport for both search and
-downloads when ROMarr is explicitly given a SOPS-managed `ia.ini` path.
-The plugin subprocess never sees account credentials. Public files need no credentials;
-access-restricted resources might require a separate ROM Hub host-side
-authentication feature and may still be unavailable to your account.
-Never place credentials in `file_sets`, URLs, or the plugin manifest.
+**Authentication:** The plugin never receives credentials. With
+[ROMarr's host-side authentication feature](https://github.com/dgmora/romarr/pull/6),
+users enter their Archive.org email/password in ROMarr's UI or supply
+`ROMARR_ARCHIVE_ORG_EMAIL_FILE` and `ROMARR_ARCHIVE_ORG_PASSWORD_FILE`
+from an external secret manager. ROMarr signs in through IA's official
+`xauthn` endpoint, caches cookies in memory only, refreshes them as needed,
+and attaches them to Archive.org HTTP requests for both ZIP listings and
+individual downloads. No `ia.ini` or IA CLI is required. Passwords are kept
+in the existing ROM Hub secret store (UI mode) or read from external files;
+they never enter the sandboxed plugin. A login does not override item
+restrictions. Never put credentials in `file_sets`, URLs or manifests.
 
 The default `file_sets=[]` keeps the original item-title search unchanged.
 
