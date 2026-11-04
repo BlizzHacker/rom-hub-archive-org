@@ -4,6 +4,7 @@ Run with the ROM Hub SDK installed: python -m unittest discover -s tests
 """
 import unittest
 from archive_org.file_sets import FileSetError, FileSets, PAGE_SIZE, SetSource
+from archive_org.importer import Importer
 from archive_org.search import Search
 
 
@@ -137,6 +138,17 @@ class FileSetTests(unittest.TestCase):
         sets.max_files = 2
         with self.assertRaisesRegex(FileSetError, "exceeding"):
             sets.search("Game", "psx", 10)
+
+    def test_rom_hub_search_and_importer_dispatch_for_disc_platform(self):
+        http = ArchiveHTTP({"set-one": {"files": [game("Game Name.chd")]}})
+        ctx = type("Context", (), {"http": http,
+                                    "config": {"file_sets": ["set-one:ps2"]}})()
+        matches = Search(ctx).search("game name", "ps2", 5)
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0].platform, "ps2")
+        plan = Importer(ctx).plan(matches[0])
+        self.assertEqual(plan.platform, "ps2")
+        self.assertEqual(plan.files[0].filename, "Game Name.chd")
 
     def test_item_search_works_without_sets(self):
         # Default behavior stays unchanged: no file metadata calls.
