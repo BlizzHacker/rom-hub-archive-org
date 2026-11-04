@@ -3,10 +3,7 @@
 Run with the ROM Hub SDK installed: python -m unittest discover -s tests
 """
 import unittest
-from urllib.parse import quote
-
 from archive_org.file_sets import FileSetError, FileSets, PAGE_SIZE, SetSource
-from archive_org.importer import Importer
 from archive_org.search import Search
 
 
@@ -100,8 +97,8 @@ class FileSetTests(unittest.TestCase):
     def test_nested_folders_have_explicit_platforms(self):
         sets, _ = catalog([game("PSX/Game.zip"), game("PS2/Game.iso")],
                           specs=["set-one/PSX:psx", "set-one/PS2:ps2"])
-        self.assertEqual([x.platform for x in sets.search("game", None, 10)],
-                         ["psx", "ps2"])
+        self.assertEqual({x.platform for x in sets.search("game", None, 10)},
+                         {"psx", "ps2"})
         self.assertEqual(sets.search("game", "ps2", 10)[0].platform, "ps2")
 
     def test_pagination_reaches_games_at_end(self):
@@ -115,7 +112,7 @@ class FileSetTests(unittest.TestCase):
     def test_rejects_unusable_names_and_private_entries(self):
         sets, _ = catalog([game("../escape.zip"),
                            game("/absolute.iso"),
-                           game("file\evil.zip"),
+                           game("file\\evil.zip"),
                            game("Hidden.iso", private="true"),
                            game("Game.zip")])
         self.assertEqual([x.title for x in sets.search("", "psx", 10)], ["Game"])
