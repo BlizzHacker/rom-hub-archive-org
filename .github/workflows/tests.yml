@@ -1,8 +1,6 @@
 name: Plugin regression tests
 
 on:
-  push:
-    branches: [feature/search-rom-set-files]
   pull_request:
 
 jobs:
