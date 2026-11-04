@@ -324,47 +324,54 @@ still works. Terms are quoted, which makes Lucene's operators literal — real
 titles like `r-type` and `sonic & knuckles` need no special handling and were
 verified live.
 
-## Search individual files inside ROM sets (opt-in)
+## Search inside Archive.org ROM sets (opt-in)
 
-The normal Archive.org search matches **item titles**. A Redump/No-Intro
-item may contain thousands of named game archives, none of which match the
-parent item's title. Optional file-set search reads Archive.org's **files
-manifest** and returns a separate result for each matching game file.
+The original provider searches **item titles**. This extension searches
+**both individual files of an Archive.org item and individual members of an
+Archive.org ZIP** exposed through its "View Contents" page. It uses HTTP
+manifests and links rather than downloading the entire archive to inspect it.
 
-Configure known sets through ROM Hub (ROMarr then searches them in Interactive
-Search):
+Configure which items and ZIP files to search via the same ROM Hub plugin:
 
-    rom-hub plugin config archive-org --set file_sets=nointro.md:genesis
-    rom-hub search "sonic the hedgehog 2" --platform genesis
+```bash
+rom-hub plugin config archive-org --set 'file_sets=retro-roms-best-set/Sony - PS1 (A-L).zip:psx,tiny-best-set-go/tiny-best-set-go-expansion-128-games.zip/Roms/PS:psx'
+rom-hub search "Crash Bandicoot 2" --platform psx
+```
 
-Entries are comma-separated, in the form identifier[/folder]:romm-platform.
-The optional folder is a path **within the item**, useful for multi-console
-set items. Examples: chd_psx/CHD-PSX-USA:psx and another-set/PS2:ps2.
-These are configuration syntax examples, not guarantees that the items have
-accessible files. Archive.org can restrict downloads independently of titles.
+Each comma-separated entry is `identifier[/path]:romm-platform`. The
+optional path can name a folder **directly inside the item**, a
+`.zip` file inside the item, or a folder **inside that ZIP**. We do not
+infer which console a folder represents. Configure only items you know
+and have permission to access. Archive.org's regular search indexes
+items, not every file inside arbitrary ZIPs, so set discovery requires
+the operator to name the sources.
 
-File-set matches are searched first, followed by the existing item search.
-The source ID carries both the item and a URL-encoded exact filename. At grab
-time the importer re-reads the manifest and plans a single HTTPS file fetch.
-ROMarr's ROM Hub download client uses its normal staging and import pipeline.
-The platform is explicit configuration, never inferred from a folder name.
+ZIP listings are retrieved with
+`https://archive.org/download/<item>/<archive>.zip/`. The plugin extracts
+same-host member links under the exact ZIP, and produces one search
+result per supported ROM payload. At grab time it revalidates the file and
+returns an exact HTTP `FetchPlan`. Compatible single-disc CHDs or other
+images are retrieved individually; where an adjacent matching `.m3u`
+exists, the plan includes the playlist and all identically named, numbered
+discs. Bare `.bin/.cue` or `.gdi` sets are still out of scope. ZIPs
+containing another monolithic archive are not inspected recursively.
 
-Archive.org's documented metadata/<identifier>/files?start=N&count=M
-pagination keeps individual reads under ROM Hub's 4 MiB HTTP response limit.
-max_set_files (default 8,000) refuses oversized sets rather than returning
-incomplete results. Each search re-fetches the manifest; the plugin caches
-it only within a single call. Configure a manageable number of items so the
-search stays within ROM Hub's execution timeout.
+The parent item's file manifest uses paginated Archive.org metadata.
+The inner ZIP directory view is a single HTML response, which must fit
+ROM Hub's 4 MiB broker limit. `max_set_files` (default 8,000) refuses
+oversized listings; ZIPs without View Contents, 403-restricted listings
+and responses that exceed the host limit fail rather than silently
+claiming to have indexed the full set.
 
-**Scope:** standalone archives (.zip, .7z, .rar) and disc image files (.chd,
-.iso, .cdi, .rvz etc.) are supported. Multi-file .cue/.bin and .gdi layouts
-are deliberately excluded until they can be downloaded as complete games.
-A single giant ZIP/7z file containing the whole collection is **not** searched
-internally. Private/hidden metadata flags are skipped, but Archive.org can
-still return HTTP 403 for locked items; indexing does not grant access.
+**Authentication:** The current ROM Hub integration uses the host-side
+HTTP fetcher and downloader, not the Archive.org `ia` CLI. It does not
+read `ia.ini` or send account cookies. Public files need no credentials;
+access-restricted resources might require a separate ROM Hub host-side
+authentication feature and may still be unavailable to your account.
+Never place credentials in `file_sets`, URLs, or the plugin manifest.
 
-An empty file_sets list leaves the original item-title search, stream and
-census behavior unchanged.
+The default `file_sets=[]` keeps the original item-title search unchanged.
+
 
 ## Install
 
