@@ -57,7 +57,7 @@ class SetSource:
         if (not separator or not _ITEM_ID.fullmatch(identifier)
                 or not _PLATFORM.fullmatch(platform)
                 or path.endswith("/") or prefix.startswith("/") or prefix.endswith("/")
-                or any(segment in ("", ".", "..") for segment in prefix.split("/"))
+                or (prefix and any(segment in ("", ".", "..") for segment in prefix.split("/")))
                 or "\\" in prefix or any(ord(ch) < 32 for ch in prefix)):
             raise FileSetError(
                 f"invalid file_sets entry {raw!r}; expected "
