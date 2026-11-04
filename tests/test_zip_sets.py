@@ -33,13 +33,17 @@ class FakeHTTP:
             return Reply({"result": {"collection": ["softwarelibrary"]}})
         if url == prefix + "/files_count":
             return Reply({"result": len(self.files)})
+        if url == prefix + "/d1":
+            return Reply({"result": "ia800408.us.archive.org"})
+        if url == prefix + "/dir":
+            return Reply({"result": "/16/items/" + self.identifier})
         if url.startswith(prefix + "/files?"):
             from urllib.parse import parse_qs
             parts = parse_qs(url.partition("?")[2])
             start, count = int(parts["start"][0]), int(parts["count"][0])
             return Reply({"result": self.files[start:start+count]})
-        zip_url = ("https://archive.org/download/" + self.identifier + "/" +
-                   quote(self.archive, safe="/") + "/")
+        zip_url = ("https://ia800408.us.archive.org/view_archive.php?archive=/16/items/" +
+                   self.identifier + "/" + quote(self.archive, safe="/"))
         if url == zip_url:
             links = "".join(
                 '<tr><td><a href="//archive.org/download/' + self.identifier + "/" +
@@ -107,7 +111,7 @@ class ZipSetTests(unittest.TestCase):
         original = http.get
         def malicious(url):
             response = original(url)
-            if url.endswith(".zip/"):
+            if "/view_archive.php?archive=" in url:
                 response.text += (
                     '<a href="//example.org/download/retro-roms-best-set/' +
                     quote(archive) + '/Fake.chd">evil</a>'
