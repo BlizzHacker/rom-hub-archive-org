@@ -41,6 +41,7 @@ from pydantic import ValidationError
 from rom_hub_sdk import SearchProvider, SearchResult
 
 from .controls import extract as extract_controls
+from .file_sets import FileSets
 from .index import MAX_ROWS, Index, IndexUnavailable, build_query, escape
 from .platforms import emulators_for, platform_for
 
@@ -114,6 +115,9 @@ class Search(SearchProvider):
         config = self.ctx.config or {}
         collections = config.get("collections") or DEFAULT_COLLECTIONS
         downloadable_only = bool(config.get("downloadable_only"))
+        # File-level search is opt-in; an empty file_sets list leaves the
+        # original item search completely unchanged.
+        file_sets = FileSets(self.ctx.http, config) if config.get("file_sets") else None
 
         if limit > MAX_RESULTS:
             raise SearchRefused(
@@ -130,15 +134,18 @@ class Search(SearchProvider):
         wanted = (platform or "").strip()
         if wanted:
             emulators = emulators_for(wanted)
-            if not emulators:
-                # Not a silent empty result: the operator asked a precise
-                # question, and the honest answer names the reason.
+            if not emulators and not (file_sets and any(
+                    source.platform == wanted for source in file_sets.configured)):
                 raise SearchRefused(
                     f"this plugin files nothing under the platform {wanted!r}: "
-                    f"no Archive.org emulator id in archive_org/platforms.py "
-                    f"maps to it. Search without a platform filter to see what "
-                    f"the configured collections do hold."
+                    f"no Archive.org emulator maps to it, and no file_sets "
+                    f"entry is configured for that platform."
                 )
+
+        file_results = file_sets.search(query, wanted or None, limit) if file_sets else []
+        remaining = limit - len(file_results)
+        if remaining <= 0 or (wanted and not emulators):
+            return file_results
 
         q = build_query(
             query,
@@ -149,7 +156,7 @@ class Search(SearchProvider):
 
         index = Index(self.ctx.http, max_rows=_max_rows(config))
         try:
-            docs = index.fetch(q, limit)
+            docs = index.fetch(q, remaining)
         except IndexUnavailable as exc:
             raise SearchRefused(str(exc)) from exc
 
@@ -158,7 +165,7 @@ class Search(SearchProvider):
             result = self._result(doc, known_controls=index.included_notes)
             if result is not None:
                 results.append(result)
-        return results
+        return file_results + results
 
     def _result(self, doc: dict, *, known_controls: bool) -> SearchResult | None:
         identifier = doc.get("identifier")
