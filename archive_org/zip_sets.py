@@ -53,7 +53,12 @@ class _MemberLinks(HTMLParser):
 
 def zip_members(http, listing_url: str, item: str, archive: str,
                 *, max_entries: int) -> list[dict]:
-    response = http.get(listing_url)
+    try:
+        response = http.get(listing_url)
+    except RuntimeError as exc:
+        raise ZipListingError(
+            f"Archive.org ZIP listing broker request failed for {item}/{archive}: {exc}"
+        ) from exc
     if response.status_code in (401, 403):
         raise ZipListingError(
             f"Archive.org ZIP contents listing is restricted (HTTP "
