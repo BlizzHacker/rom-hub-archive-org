@@ -12,8 +12,9 @@ from archive_org.search import Search
 class Response:
     status_code = 200
 
-    def __init__(self, data):
+    def __init__(self, data, text=None):
         self.data = data
+        self.text = text
 
     def json(self):
         return self.data
@@ -26,6 +27,10 @@ class ArchiveHTTP:
 
     def get(self, url, params=None):
         self.requests.append(url)
+        if url.startswith("https://archive.org/download/"):
+            from urllib.parse import unquote
+            identifier, _, name = url[len("https://archive.org/download/"):].partition("/")
+            return Response(None, self.items[identifier].get("texts", {})[unquote(name)])
         root = "https://archive.org/metadata/"
         assert url.startswith(root), url
         item_path = url[len(root):]
@@ -95,6 +100,26 @@ class FileSetTests(unittest.TestCase):
         refreshed = FileSets(http, {"file_sets": ["set-one:psx"]})
         with self.assertRaisesRegex(FileSetError, "no longer"):
             refreshed.plan(result)
+
+    def test_direct_item_m3u_fetches_exact_referenced_discs(self):
+        files = [game("PSX/Chronicles (Disc 1).chd"),
+                 game("PSX/Chronicles (Disc 2).chd"),
+                 game("PSX/Chronicles (Disc 2).iso"),
+                 game("PSX/Chronicles.m3u")]
+        sets, http = catalog(files, specs=["set-one/PSX:psx"])
+        http.items["set-one"]["texts"] = {
+            "PSX/Chronicles.m3u":
+                "#EXTM3U\\r\\nChronicles (Disc 1).chd\\r\\n"
+                "Chronicles (Disc 2).chd\\r\\n"
+        }
+        disc = next(r for r in sets.search("Chronicles", "psx", 10)
+                    if "Disc%201" in r.source_id)
+        plan = sets.plan(disc)
+        self.assertEqual([f.filename for f in plan.files],
+                         ["Chronicles.m3u", "Chronicles (Disc 1).chd",
+                          "Chronicles (Disc 2).chd"])
+        self.assertNotIn("Chronicles (Disc 2).iso",
+                         [f.filename for f in plan.files])
 
     def test_nested_folders_have_explicit_platforms(self):
         sets, _ = catalog([game("PSX/Game.zip"), game("PS2/Game.iso")],
