@@ -238,39 +238,62 @@ class FileSets:
         self._cache[identifier] = files
         return files
 
+    def _zip_files(self, identifier: str, archive: str) -> list[dict]:
+        key = (identifier, archive)
+        if key in self._zip_cache:
+            return self._zip_cache[key]
+        matched = next((entry for entry in self._files(identifier)
+                        if isinstance(entry, dict) and entry.get("name") == archive), None)
+        if not _payload(matched) or not archive.lower().endswith(".zip"):
+            raise FileSetError(f"ZIP {archive!r} is not listed as downloadable "
+                               f"in Archive.org item {identifier!r}")
+        url = DOWNLOAD + quote(identifier, safe="") + "/" + quote(archive, safe="/") + "/"
+        try:
+            result = zip_members(self.http, url, max_entries=self.max_files)
+        except ZipListingError as exc:
+            raise FileSetError(str(exc)) from exc
+        self._zip_cache[key] = result
+        return result
+
     def search(self, query: str, platform: str | None, limit: int) -> list[SearchResult]:
         selected = [source for source in self.configured
                     if not platform or source.platform == platform]
         if not selected or limit <= 0:
             return []
-        by_item: dict[str, list[SetSource]] = {}
+        by_item: dict[tuple[str, str | None], list[SetSource]] = {}
         for source in selected:
-            by_item.setdefault(source.identifier, []).append(source)
+            by_item.setdefault((source.identifier, source.archive), []).append(source)
         ranked = []
-        for identifier, choices in by_item.items():
-            for entry in self._files(identifier):
+        for (identifier, archive), choices in by_item.items():
+            entries = (self._zip_files(identifier, archive) if archive
+                       else self._files(identifier))
+            for entry in entries:
                 if not _payload(entry):
                     continue
                 name = entry["name"]
-                # Longest prefix wins: a dedicated subfolder takes precedence
-                # over a catch-all source for the same item.
-                applicable = [s for s in choices if s.contains(name)]
+                applicable = [source for source in choices if source.contains(name)]
                 if not applicable:
                     continue
                 source = max(applicable, key=lambda s: len(s.prefix))
                 points = _score(name, query)
                 if not points:
                     continue
+                marker = ("zip:" + quote(identifier, safe="") + ":"
+                          + quote(archive, safe="") + ":" + quote(name, safe="")
+                          if archive else
+                          "set:" + quote(identifier, safe="") + ":" + quote(name, safe=""))
+                url = (DOWNLOAD + quote(identifier, safe="") + "/" +
+                       (quote(archive, safe="/") + "/" if archive else "") +
+                       quote(name, safe="" if archive else "/"))
                 try:
                     result = SearchResult(
-                        source_id="set:" + quote(identifier, safe="") + ":"
-                                  + quote(name, safe=""),
+                        source_id=marker,
                         title=posixpath.basename(name).rsplit(".", 1)[0],
                         platform=source.platform,
                         size_bytes=_size(entry),
-                        url=DOWNLOAD + quote(identifier, safe="") + "/"
-                            + quote(name, safe="/"),
-                        extra={"set_item": identifier, "set_file": name},
+                        url=url,
+                        extra={"set_item": identifier, "set_file": name,
+                               "set_zip": archive or ""},
                     )
                 except (ValidationError, TypeError, ValueError):
                     continue
@@ -280,29 +303,47 @@ class FileSets:
 
     def plan(self, result: SearchResult) -> FetchPlan:
         source_id = str(result.source_id or "")
-        try:
-            marker, encoded_item, encoded_name = source_id.split(":", 2)
-        except ValueError as exc:
-            raise FileSetError("invalid file-set search result source id") from exc
-        if marker != "set":
-            raise FileSetError("not a file-set search result")
+        parts = source_id.split(":")
+        if len(parts) == 3 and parts[0] == "set":
+            _, encoded_item, encoded_name = parts
+            encoded_archive = None
+        elif len(parts) == 4 and parts[0] == "zip":
+            _, encoded_item, encoded_archive, encoded_name = parts
+        else:
+            raise FileSetError("invalid file-set search result source id")
         identifier, name = unquote(encoded_item), unquote(encoded_name)
+        archive = unquote(encoded_archive) if encoded_archive is not None else None
         if (not _ITEM_ID.fullmatch(identifier) or not _valid_name(name)
                 or quote(identifier, safe="") != encoded_item
-                or quote(name, safe="") != encoded_name):
+                or quote(name, safe="") != encoded_name
+                or (archive is not None and
+                    (not _valid_name(archive)
+                     or quote(archive, safe="") != encoded_archive))):
             raise FileSetError("invalid or non-canonical file-set source id")
-        choices = [s for s in self.configured if s.identifier == identifier and s.contains(name)]
+        choices = [source for source in self.configured
+                   if source.identifier == identifier and source.archive == archive
+                   and source.contains(name)]
         if not choices:
             raise FileSetError(f"{name!r} is not in a configured file set")
         source = max(choices, key=lambda s: len(s.prefix))
-        entry = next((entry for entry in self._files(identifier)
+        entries = self._zip_files(identifier, archive) if archive else self._files(identifier)
+        entry = next((entry for entry in entries
                       if isinstance(entry, dict) and entry.get("name") == name), None)
         if not _payload(entry):
-            raise FileSetError(f"{name!r} is no longer a downloadable file in {identifier!r}")
-        url = DOWNLOAD + quote(identifier, safe="") + "/" + quote(name, safe="/")
+            raise FileSetError(f"{name!r} is no longer downloadable in {identifier!r}")
+        group = _companions(name, entries)
+        prefix = (DOWNLOAD + quote(identifier, safe="") + "/" +
+                  (quote(archive, safe="/") + "/" if archive else ""))
+        files = [
+            FetchFile(
+                url=prefix + quote(e["name"], safe="" if archive else "/"),
+                filename=posixpath.basename(e["name"]),
+                size_bytes=_size(e),
+            )
+            for e in group
+        ]
         return FetchPlan(
-            files=[FetchFile(url=url, filename=posixpath.basename(name),
-                             size_bytes=_size(entry))],
+            files=files,
             platform=source.platform,
             collection=self.config.get("collection") or "Archive.org",
         )
