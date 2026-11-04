@@ -3,6 +3,7 @@
 Run with the ROM Hub SDK installed: python -m unittest discover -s tests
 """
 import unittest
+from unittest.mock import patch
 from archive_org.file_sets import FileSetError, FileSets, PAGE_SIZE, SetSource
 from archive_org.importer import Importer
 from archive_org.search import Search
@@ -23,7 +24,7 @@ class ArchiveHTTP:
         self.items = items
         self.requests = []
 
-    def get(self, url):
+    def get(self, url, params=None):
         self.requests.append(url)
         root = "https://archive.org/metadata/"
         assert url.startswith(root), url
@@ -102,6 +103,74 @@ class FileSetTests(unittest.TestCase):
                          {"psx", "ps2"})
         self.assertEqual(sets.search("game", "ps2", 10)[0].platform, "ps2")
 
+    def test_longest_scope_owns_platform_before_filtering(self):
+        entries = [game("Game.chd"), game("PS2/Another Game.iso")]
+        for mapping in (["set-one:psx", "set-one/PS2:ps2"],
+                        ["set-one/PS2:ps2", "set-one:psx"]):
+            sets, _ = catalog(entries, specs=mapping)
+            self.assertEqual([r.title for r in sets.search("Another Game", "psx", 10)], [])
+            hits = sets.search("Another Game", "ps2", 10)
+            self.assertEqual(len(hits), 1)
+            self.assertEqual(hits[0].platform, "ps2")
+            self.assertEqual(sets.plan(hits[0]).platform, "ps2")
+            self.assertEqual(sets.search("Another Game", None, 10)[0].platform, "ps2")
+
+    def test_failures_are_isolated_with_context(self):
+        healthy = {"files": [game("Working Game.chd")]}
+        broken = {"files": [game("Missing Game.chd")]}
+        base = ArchiveHTTP({"good": healthy, "bad": broken})
+        original_get = base.get
+        def get(url, params=None):
+            if "/metadata/bad/" in url:
+                raise RuntimeError("response too large at broker")
+            return original_get(url, params=params)
+        base.get = get
+        sets = FileSets(base, {"file_sets": ["bad:psx", "good:psx"]})
+        outcome = sets.search_outcome("Working", "psx", 10)
+        self.assertEqual(len(outcome.results), 1)
+        self.assertIn("bad", outcome.failures[0])
+        self.assertIn("response too large", outcome.failures[0])
+        self.assertEqual(len(sets.search("Working", "psx", 10)), 1)
+        with self.assertRaisesRegex(FileSetError, "bad"):
+            FileSets(base, {"file_sets": ["bad:psx"]}).search("Working", "psx", 10)
+
+    def test_item_search_survives_failed_sets_and_reverse(self):
+        http = ArchiveHTTP({"bad": {"files": [game("Missing Game.chd")]},
+                            "good": {"files": [game("Working Game.chd")]}})
+        original_get = http.get
+        def fail_bad(url, params=None):
+            if "/metadata/bad/" in url:
+                raise RuntimeError("broker transport failed")
+            return original_get(url, params=params)
+        http.get = fail_bad
+        config = {"file_sets": ["bad:psx"]}
+        ctx = type("Ctx", (), {"http": http, "config": config})()
+        fake_doc = {"identifier": "item-good", "title": "Working Game",
+                    "emulator": "psx", "item_size": 123}
+        class IndexStub:
+            included_notes = True
+            def __init__(self, *args, **kwargs):
+                pass
+            def fetch(self, query, remaining):
+                return [fake_doc]
+        with patch("archive_org.search.Index", IndexStub):
+            results = Search(ctx).search("Working Game", "psx", 10)
+        self.assertEqual([r.source_id for r in results], ["item-good"])
+
+        from archive_org.index import IndexUnavailable
+        class FailIndex(IndexStub):
+            def fetch(self, query, remaining):
+                raise IndexUnavailable("index is offline")
+        ctx.config = {"file_sets": ["good:psx"]}
+        with patch("archive_org.search.Index", FailIndex):
+            results = Search(ctx).search("Working Game", "psx", 10)
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0].source_id.startswith("set:"))
+        with patch("archive_org.search.Index", FailIndex):
+            with self.assertRaisesRegex(Exception, "offline"):
+                Search(type("Ctx", (), {"http": http, "config": {}})()).search(
+                    "Working Game", "psx", 10)
+
     def test_pagination_reaches_games_at_end(self):
         entries = [game(f"Misc {n:04}.zip") for n in range(PAGE_SIZE)]
         entries.append(game("Target At End.chd"))
@@ -159,7 +228,7 @@ class FileSetTests(unittest.TestCase):
         class Http:
             def __init__(self):
                 self.requests = []
-            def get(self, url):
+            def get(self, url, params=None):
                 self.requests.append(url)
                 return IndexResponse()
         http = Http()
