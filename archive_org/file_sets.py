@@ -41,7 +41,10 @@ _NON_WORD = re.compile(r"[^0-9a-z]+")
 _BRACKETED = re.compile(r"[\(\[][^\)\]]*[\)\]]")
 _ITEM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _PLATFORM = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
-_BLOCKED = ("private", "is_dark", "hidden")
+# A file flagged private may be accessible to an authenticated account.
+# Do not treat that metadata flag as an authorization decision; the host
+# must still obtain the actual listing/download or return HTTP 403.
+_BLOCKED = ("is_dark", "hidden")
 
 
 class FileSetError(Exception):
