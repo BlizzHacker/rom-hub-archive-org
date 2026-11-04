@@ -12,6 +12,7 @@ No public collection is scanned or downloaded without explicit configuration.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 import posixpath
 import re
 from urllib.parse import quote, unquote
@@ -26,6 +27,8 @@ METADATA = "https://archive.org/metadata/"
 DOWNLOAD = "https://archive.org/download/"
 DEFAULT_MAX_FILES = 8000
 PAGE_SIZE = 400
+MAX_PLAYLIST_BYTES = 128 * 1024
+MAX_PLAN_FILES = 128
 DISC_SUFFIXES = (".chd", ".iso", ".cso", ".pbp", ".cdi", ".rvz", ".gcm", ".ciso", ".zso")
 _DISC_PART = re.compile(r"\s*[\(\[](?:disc|disk)\s*\d+(?:\s*of\s*\d+)?[\)\]]", re.I)
 
@@ -83,6 +86,12 @@ class SetSource:
         return not self.prefix or name.startswith(self.prefix + "/")
 
 
+@dataclass
+class SearchOutcome:
+    results: list[SearchResult]
+    failures: list[str]
+
+
 def sources(config: dict) -> list[SetSource]:
     result = []
     seen = set()
@@ -128,30 +137,6 @@ def _game_family(name: str) -> str:
     return _DISC_PART.sub("", stem).strip().casefold()
 
 
-def _companions(name: str, entries: list[dict]) -> list[dict]:
-    """Fetch an available playlist together with every same-family disc image."""
-    primary = next(entry for entry in entries if entry["name"] == name)
-    if not name.lower().endswith(DISC_SUFFIXES):
-        return [primary]
-    folder, family = posixpath.dirname(name), _game_family(name)
-    relevant = [entry for entry in entries if isinstance(entry, dict)
-                and _valid_name(entry.get("name"))
-                and posixpath.dirname(entry["name"]) == folder
-                and _game_family(entry["name"]) == family
-                and (entry["name"].lower().endswith(DISC_SUFFIXES)
-                     or entry["name"].lower().endswith(".m3u"))]
-    playlist = [entry for entry in relevant
-                if entry["name"].lower().endswith(".m3u")]
-    if not playlist:
-        return [primary]
-    if len(playlist) > 1:
-        raise FileSetError("ambiguous multi-disc playlists share a game name")
-    if any(not _payload(entry) for entry in relevant
-           if not entry["name"].lower().endswith(".m3u")):
-        raise FileSetError("playlist includes an invalid disc filename")
-    return sorted(relevant, key=lambda entry: entry["name"].lower())
-
-
 def _size(entry) -> int | None:
     try:
         value = int(entry["size"])
@@ -173,13 +158,17 @@ def _score(name: str, query: str) -> int:
         return 1
     if title == wanted:
         return 3
-    if title.startswith(wanted):
+    if title.startswith(wanted + " "):
         return 2
     return 1 if all(word in title.split() for word in wanted.split()) else 0
 
 
 def _get(http, url: str):
-    response = http.get(url)
+    try:
+        response = http.get(url)
+    except RuntimeError as exc:
+        # The SDK forwards broker transport and size errors as RuntimeError.
+        raise FileSetError(f"Archive.org broker request failed for {url}: {exc}") from exc
     if response.status_code != 200:
         raise FileSetError(f"Archive.org returned HTTP {response.status_code} for {url}")
     try:
@@ -268,66 +257,156 @@ class FileSets:
         self._zip_cache[key] = result
         return result
 
-    def search(self, query: str, platform: str | None, limit: int) -> list[SearchResult]:
-        selected = [source for source in self.configured
-                    if not platform or source.platform == platform]
-        if not selected or limit <= 0:
-            return []
-        by_item: dict[tuple[str, str | None], list[SetSource]] = {}
-        for source in selected:
-            by_item.setdefault((source.identifier, source.archive), []).append(source)
+    def resources(self) -> dict[tuple[str, str | None], list[SetSource]]:
+        grouped: dict[tuple[str, str | None], list[SetSource]] = {}
+        for source in self.configured:
+            grouped.setdefault((source.identifier, source.archive), []).append(source)
+        return grouped
+
+    def resolve(self, identifier: str, archive: str | None,
+                name: str) -> SetSource | None:
+        """Resolve from all mappings before filtering by platform."""
+        applicable = (s for s in self.configured
+                      if s.identifier == identifier and s.archive == archive
+                      and s.contains(name))
+        return max(applicable, key=lambda s: len(s.prefix), default=None)
+
+    @staticmethod
+    def source_id(identifier: str, archive: str | None, name: str) -> str:
+        if archive is not None:
+            return ("zip:" + quote(identifier, safe="") + ":" +
+                    quote(archive, safe="") + ":" + quote(name, safe=""))
+        return "set:" + quote(identifier, safe="") + ":" + quote(name, safe="")
+
+    @staticmethod
+    def file_url(identifier: str, archive: str | None, name: str) -> str:
+        return (DOWNLOAD + quote(identifier, safe="") + "/" +
+                (quote(archive, safe="/") + "/" if archive else "") +
+                quote(name, safe="" if archive else "/"))
+
+    def result(self, identifier: str, archive: str | None, entry: dict
+               ) -> SearchResult | None:
+        if not _payload(entry):
+            return None
+        name = entry["name"]
+        source = self.resolve(identifier, archive, name)
+        if source is None:
+            return None
+        try:
+            return SearchResult(
+                source_id=self.source_id(identifier, archive, name),
+                title=posixpath.basename(name).rsplit(".", 1)[0],
+                platform=source.platform,
+                size_bytes=_size(entry),
+                url=self.file_url(identifier, archive, name),
+                extra={"set_item": identifier, "set_file": name,
+                       "set_zip": archive or ""},
+            )
+        except (ValidationError, TypeError, ValueError):
+            return None
+
+    def search_outcome(self, query: str, platform: str | None,
+                       limit: int) -> SearchOutcome:
+        if limit <= 0:
+            return SearchOutcome([], [])
         ranked = []
         unavailable = []
-        for (identifier, archive), choices in by_item.items():
+        for (identifier, archive), choices in self.resources().items():
+            if platform and not any(s.platform == platform for s in choices):
+                continue
             try:
                 entries = (self._zip_files(identifier, archive) if archive
                            else self._files(identifier))
             except FileSetError as exc:
-                unavailable.append(str(exc))
+                unavailable.append(f"{identifier}/{archive or '(direct files)'}: {exc}")
                 continue
             for entry in entries:
-                if not _payload(entry):
+                result = self.result(identifier, archive, entry)
+                if result is None or (platform and result.platform != platform):
                     continue
                 name = entry["name"]
-                applicable = [source for source in choices if source.contains(name)]
-                if not applicable:
-                    continue
-                source = max(applicable, key=lambda s: len(s.prefix))
                 points = _score(name, query)
-                if not points:
-                    continue
-                marker = ("zip:" + quote(identifier, safe="") + ":"
-                          + quote(archive, safe="") + ":" + quote(name, safe="")
-                          if archive else
-                          "set:" + quote(identifier, safe="") + ":" + quote(name, safe=""))
-                url = (DOWNLOAD + quote(identifier, safe="") + "/" +
-                       (quote(archive, safe="/") + "/" if archive else "") +
-                       quote(name, safe="" if archive else "/"))
-                try:
-                    result = SearchResult(
-                        source_id=marker,
-                        title=posixpath.basename(name).rsplit(".", 1)[0],
-                        platform=source.platform,
-                        size_bytes=_size(entry),
-                        url=url,
-                        extra={"set_item": identifier, "set_file": name,
-                               "set_zip": archive or ""},
-                    )
-                except (ValidationError, TypeError, ValueError):
-                    continue
-                ranked.append((-points, len(name), name.casefold(), result))
+                if points:
+                    ranked.append((-points, len(name), name.casefold(), result))
         ranked.sort(key=lambda item: item[:3])
-        if unavailable:
-            # Failure of one restricted ZIP must not suppress matches from
-            # another configured source. But never report "no matches" when
-            # the actual issue was an inaccessible set or a truncated index.
-            if not ranked:
-                raise FileSetError("file-set search unavailable: " +
-                                   "; ".join(unavailable))
-            import sys
-            for message in unavailable:
-                print(f"archive-org file-set skipped: {message}", file=sys.stderr)
-        return [row[3] for row in ranked[:limit]]
+        return SearchOutcome([row[3] for row in ranked[:limit]], unavailable)
+
+    def search(self, query: str, platform: str | None,
+               limit: int) -> list[SearchResult]:
+        outcome = self.search_outcome(query, platform, limit)
+        if outcome.failures and not outcome.results:
+            raise FileSetError("file-set search unavailable: " +
+                               "; ".join(outcome.failures))
+        for message in outcome.failures:
+            print(f"archive-org file-set skipped: {message}", file=sys.stderr)
+        return outcome.results
+
+    def _companions(self, identifier: str, archive: str | None, name: str,
+                    entries: list[dict], platform: str) -> list[dict]:
+        primary = next(e for e in entries if isinstance(e, dict)
+                       and e.get("name") == name)
+        if not name.lower().endswith(DISC_SUFFIXES):
+            return [primary]
+        folder, family = posixpath.dirname(name), _game_family(name)
+        playlists = [e for e in entries if isinstance(e, dict)
+                     and _valid_name(e.get("name"))
+                     and posixpath.dirname(e["name"]) == folder
+                     and e["name"].lower().endswith(".m3u")
+                     and _game_family(e["name"]) == family]
+        if not playlists:
+            return [primary]
+        if len(playlists) != 1:
+            raise FileSetError(f"ambiguous playlists for {name!r}")
+        playlist = playlists[0]
+        playlist_name = playlist["name"]
+        try:
+            FetchFile(url=self.file_url(identifier, archive, playlist_name),
+                      filename=posixpath.basename(playlist_name))
+        except (ValidationError, ValueError) as exc:
+            raise FileSetError(f"unsafe playlist {playlist_name!r}") from exc
+        if (any(str(playlist.get(k, "")).lower() in ("true", "1", "yes")
+                for k in _BLOCKED) or
+                (_size(playlist) is not None and _size(playlist) > MAX_PLAYLIST_BYTES)):
+            raise FileSetError(f"playlist {playlist_name!r} is blocked or too large")
+        url = self.file_url(identifier, archive, playlist_name)
+        try:
+            response = self.http.get(url)
+        except RuntimeError as exc:
+            raise FileSetError(f"Archive.org broker playlist request failed for {url}: {exc}") from exc
+        if response.status_code != 200:
+            raise FileSetError(f"playlist {playlist_name!r} returned HTTP {response.status_code}")
+        content = response.text
+        if not isinstance(content, str) or len(content.encode("utf-8")) > MAX_PLAYLIST_BYTES:
+            raise FileSetError(f"playlist {playlist_name!r} exceeds {MAX_PLAYLIST_BYTES} bytes")
+        content = content.lstrip("\ufeff")
+        by_name = {e["name"]: e for e in entries
+                   if isinstance(e, dict) and isinstance(e.get("name"), str)}
+        selected: list[dict] = [playlist]
+        seen: set[str] = set()
+        for line in content.splitlines():
+            ref = line.strip()
+            if not ref or ref.startswith("#"):
+                continue
+            original = ref
+            if ref.startswith("./"):
+                ref = ref[2:]
+            if (not ref or ref in (".", "..") or "/" in ref or "\\" in ref
+                    or ":" in ref or ref.startswith("~")
+                    or not ref.lower().endswith(DISC_SUFFIXES)):
+                raise FileSetError(f"unsupported playlist reference {original!r} in {playlist_name!r}")
+            full = posixpath.join(folder, ref) if folder else ref
+            entry = by_name.get(full)
+            owner = self.resolve(identifier, archive, full)
+            if not _payload(entry) or owner is None or owner.platform != platform:
+                raise FileSetError(f"missing, invalid or out-of-scope playlist disc {original!r}")
+            if full not in seen:
+                selected.append(entry)
+                seen.add(full)
+            if len(selected) > MAX_PLAN_FILES:
+                raise FileSetError(f"playlist {playlist_name!r} has too many files")
+        if name not in seen:
+            raise FileSetError(f"selected disc {name!r} is not referenced by {playlist_name!r}")
+        return selected
 
     def plan(self, result: SearchResult) -> FetchPlan:
         source_id = str(result.source_id or "")
@@ -348,23 +427,18 @@ class FileSets:
                     (not _valid_name(archive)
                      or quote(archive, safe="") != encoded_archive))):
             raise FileSetError("invalid or non-canonical file-set source id")
-        choices = [source for source in self.configured
-                   if source.identifier == identifier and source.archive == archive
-                   and source.contains(name)]
-        if not choices:
+        source = self.resolve(identifier, archive, name)
+        if source is None:
             raise FileSetError(f"{name!r} is not in a configured file set")
-        source = max(choices, key=lambda s: len(s.prefix))
         entries = self._zip_files(identifier, archive) if archive else self._files(identifier)
         entry = next((entry for entry in entries
                       if isinstance(entry, dict) and entry.get("name") == name), None)
         if not _payload(entry):
             raise FileSetError(f"{name!r} is no longer downloadable in {identifier!r}")
-        group = _companions(name, entries)
-        prefix = (DOWNLOAD + quote(identifier, safe="") + "/" +
-                  (quote(archive, safe="/") + "/" if archive else ""))
+        group = self._companions(identifier, archive, name, entries, source.platform)
         files = [
             FetchFile(
-                url=prefix + quote(e["name"], safe="" if archive else "/"),
+                url=self.file_url(identifier, archive, e["name"]),
                 filename=posixpath.basename(e["name"]),
                 size_bytes=_size(e),
             )
