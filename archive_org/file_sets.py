@@ -251,7 +251,7 @@ class FileSets:
         server = _get(self.http, base + "/d1").get("result")
         directory = _get(self.http, base + "/dir").get("result")
         if (not isinstance(server, str)
-                or not re.fullmatch(r"ia[0-9]+\\.(?:us|ca)\\.archive\\.org", server)
+                or not re.fullmatch(r"ia[0-9]+\.(?:us|ca)\.archive\.org", server)
                 or not isinstance(directory, str)
                 or not re.fullmatch(r"/[0-9]+/items/" + re.escape(identifier), directory)):
             raise FileSetError(f"Archive.org item {identifier!r} has invalid storage host or directory")
