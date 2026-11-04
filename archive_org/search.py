@@ -36,6 +36,8 @@ of reach. `downloadable_only` exists for the operator who is bulk
 importing and does not want to be shown items the importer will refuse.
 """
 
+import sys
+
 from pydantic import ValidationError
 
 from rom_hub_sdk import SearchProvider, SearchResult
@@ -138,34 +140,42 @@ class Search(SearchProvider):
                     source.platform == wanted for source in file_sets.configured)):
                 raise SearchRefused(
                     f"this plugin files nothing under the platform {wanted!r}: "
-                    f"no Archive.org emulator maps to it, and no file_sets "
+                    f"no Archive.org emulator maps to it in platforms.py, and no file_sets "
                     f"entry is configured for that platform."
                 )
 
-        file_results = file_sets.search(query, wanted or None, limit) if file_sets else []
+        outcome = (file_sets.search_outcome(query, wanted or None, limit)
+                   if file_sets else None)
+        file_results = outcome.results if outcome else []
+        failures = list(outcome.failures) if outcome else []
         remaining = limit - len(file_results)
-        if remaining <= 0 or (wanted and not emulators):
-            return file_results
+        results: list[SearchResult] = list(file_results)
 
-        q = build_query(
-            query,
-            collections,
-            emulators=emulators,
-            downloadable_only=downloadable_only,
-        )
+        if remaining > 0 and not (wanted and not emulators):
+            q = build_query(
+                query,
+                collections,
+                emulators=emulators,
+                downloadable_only=downloadable_only,
+            )
+            index = Index(self.ctx.http, max_rows=_max_rows(config))
+            try:
+                docs = index.fetch(q, remaining)
+            except IndexUnavailable as exc:
+                failures.append(f"item-title index: {exc}")
+            else:
+                for doc in docs:
+                    result = self._result(doc, known_controls=index.included_notes)
+                    if result is not None:
+                        results.append(result)
 
-        index = Index(self.ctx.http, max_rows=_max_rows(config))
-        try:
-            docs = index.fetch(q, remaining)
-        except IndexUnavailable as exc:
-            raise SearchRefused(str(exc)) from exc
-
-        results: list[SearchResult] = []
-        for doc in docs:
-            result = self._result(doc, known_controls=index.included_notes)
-            if result is not None:
-                results.append(result)
-        return file_results + results
+        if failures and not results:
+            raise SearchRefused("Archive.org search unavailable: " + "; ".join(failures))
+        # The ROM Hub host captures plugin stderr for diagnostics; successful
+        # searches do not expose a warning field in the public result schema.
+        for message in failures:
+            print(f"archive-org partial search failure: {message}", file=sys.stderr)
+        return results[:limit]
 
     def _result(self, doc: dict, *, known_controls: bool) -> SearchResult | None:
         identifier = doc.get("identifier")
