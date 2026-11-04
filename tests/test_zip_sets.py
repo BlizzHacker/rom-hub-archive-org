@@ -107,7 +107,7 @@ class ZipSetTests(unittest.TestCase):
                  "Final Fantasy VIII (USA).chd"]
         http = FakeHTTP("set-one", archive, files)
         config = {"file_sets": ["set-one/PSX.zip:psx"]}
-        http.playlists["Final Fantasy VII (USA).m3u"] = "\\ufeff#EXTM3U\\r\\n" + "\\r\\n".join(files[:3]) + "\\r\\n"
+        http.playlists["Final Fantasy VII (USA).m3u"] = "\ufeff#EXTM3U\r\n" + "\r\n".join(files[:3]) + "\r\n"
         results = FileSets(http, config).search("Final Fantasy VII", "psx", 10)
         self.assertEqual(len(results), 3)  # individual discs searchable
         plan = FileSets(http, config).plan(results[0])
@@ -130,9 +130,9 @@ class ZipSetTests(unittest.TestCase):
                  "Game (Disc 2).iso", "Game.m3u"]
         http = FakeHTTP("set-one", "PSX.zip", files)
         http.playlists["Game.m3u"] = (
-            "\\ufeff#EXTM3U\\r\\n#EXTINF:1,Disc\\r\\n"
-            "./Game (Disc 1).chd\\r\\nGame (Disc 2).chd\\r\\n"
-            "Game (Disc 2).chd\\r\\n"
+            "\ufeff#EXTM3U\r\n#EXTINF:1,Disc\r\n"
+            "./Game (Disc 1).chd\r\nGame (Disc 2).chd\r\n"
+            "Game (Disc 2).chd\r\n"
         )
         sets = FileSets(http, {"file_sets": ["set-one/PSX.zip:psx"]})
         first = sets.search("Game", "psx", 10)[0]
@@ -150,12 +150,12 @@ class ZipSetTests(unittest.TestCase):
         sets = FileSets(http, {"file_sets": ["set-one/PSX.zip:psx"]})
         selected = sets.search("Game", "psx", 10)[0]
         invalid = [
-            ("Game (Disc 1).chd\\nGame (Disc 2).chd\\n", "missing"),
-            ("../Game (Disc 1).chd\\n", "unsupported"),
-            ("https://archive.org/a.chd\\n", "unsupported"),
-            ("/Game (Disc 1).chd\\n", "unsupported"),
-            ("Subfolder/Game (Disc 1).chd\\n", "unsupported"),
-            ("Game (Disc 1).cue\\n", "unsupported"),
+            ("Game (Disc 1).chd\nGame (Disc 2).chd\n", "missing"),
+            ("../Game (Disc 1).chd\n", "unsupported"),
+            ("https://archive.org/a.chd\n", "unsupported"),
+            ("/Game (Disc 1).chd\n", "unsupported"),
+            ("Subfolder/Game (Disc 1).chd\n", "unsupported"),
+            ("Game (Disc 1).cue\n", "unsupported"),
         ]
         for contents, message in invalid:
             with self.subTest(contents=contents):
