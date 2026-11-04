@@ -19,11 +19,15 @@ from urllib.parse import quote, unquote
 from pydantic import ValidationError
 from rom_hub_sdk import FetchFile, FetchPlan, SearchResult
 
+from .zip_sets import ZipListingError, zip_members
+
 
 METADATA = "https://archive.org/metadata/"
 DOWNLOAD = "https://archive.org/download/"
 DEFAULT_MAX_FILES = 8000
 PAGE_SIZE = 400
+DISC_SUFFIXES = (".chd", ".iso", ".cso", ".pbp", ".cdi", ".rvz", ".gcm", ".ciso", ".zso")
+_DISC_PART = re.compile(r"\s*[\(\[](?:disc|disk)\s*\d+(?:\s*of\s*\d+)?[\)\]]", re.I)
 
 # One payload file per game. Raw cue/bin/gdi sets need a separate, disc-aware
 # acquisition plan and are deliberately *not* offered as incomplete games.
@@ -49,6 +53,7 @@ class SetSource:
     identifier: str
     prefix: str
     platform: str
+    archive: str | None = None
 
     @classmethod
     def parse(cls, raw: str) -> "SetSource":
@@ -63,6 +68,12 @@ class SetSource:
                 f"invalid file_sets entry {raw!r}; expected "
                 "'Archive.org-identifier[/folder]:romm-platform'"
             )
+        parts = prefix.split("/") if prefix else []
+        zip_index = next((i for i, part in enumerate(parts)
+                          if part.lower().endswith(".zip")), None)
+        if zip_index is not None:
+            return cls(identifier, "/".join(parts[zip_index + 1:]), platform,
+                       "/".join(parts[:zip_index + 1]))
         return cls(identifier, prefix, platform)
 
     def contains(self, name: str) -> bool:
@@ -74,7 +85,7 @@ def sources(config: dict) -> list[SetSource]:
     seen = set()
     for raw in config.get("file_sets") or []:
         source = SetSource.parse(raw)
-        key = (source.identifier, source.prefix)
+        key = (source.identifier, source.archive, source.prefix)
         if key in seen:
             raise FileSetError(f"duplicate file_sets entry for {key!r}")
         seen.add(key)
@@ -106,6 +117,36 @@ def _payload(entry) -> bool:
         return False
     return not any(str(entry.get(k, "")).lower() in ("true", "1", "yes")
                    for k in _BLOCKED)
+
+
+def _game_family(name: str) -> str:
+    """Compare disc filenames without their disc-number suffix."""
+    stem = posixpath.basename(name).rsplit(".", 1)[0]
+    return _DISC_PART.sub("", stem).strip().casefold()
+
+
+def _companions(name: str, entries: list[dict]) -> list[dict]:
+    """Fetch an available playlist together with every same-family disc image."""
+    primary = next(entry for entry in entries if entry["name"] == name)
+    if not name.lower().endswith(DISC_SUFFIXES):
+        return [primary]
+    folder, family = posixpath.dirname(name), _game_family(name)
+    relevant = [entry for entry in entries if isinstance(entry, dict)
+                and _valid_name(entry.get("name"))
+                and posixpath.dirname(entry["name"]) == folder
+                and _game_family(entry["name"]) == family
+                and (entry["name"].lower().endswith(DISC_SUFFIXES)
+                     or entry["name"].lower().endswith(".m3u"))]
+    playlist = [entry for entry in relevant
+                if entry["name"].lower().endswith(".m3u")]
+    if not playlist:
+        return [primary]
+    if len(playlist) > 1:
+        raise FileSetError("ambiguous multi-disc playlists share a game name")
+    if any(not _payload(entry) for entry in relevant
+           if not entry["name"].lower().endswith(".m3u")):
+        raise FileSetError("playlist includes an invalid disc filename")
+    return sorted(relevant, key=lambda entry: entry["name"].lower())
 
 
 def _size(entry) -> int | None:
@@ -161,6 +202,7 @@ class FileSets:
             raise FileSetError("max_set_files must be positive")
         self.max_files = requested
         self._cache: dict[str, list[dict]] = {}
+        self._zip_cache: dict[tuple[str, str], list[dict]] = {}
 
     def _files(self, identifier: str) -> list[dict]:
         if identifier in self._cache:
