@@ -114,7 +114,7 @@ class FileSetTests(unittest.TestCase):
         sets, _ = catalog([game("../escape.zip"),
                            game("/absolute.iso"),
                            game("file\\evil.zip"),
-                           game("Hidden.iso", private="true"),
+                           game("Hidden.iso", is_dark="true"),
                            game("Game.zip")])
         self.assertEqual([x.title for x in sets.search("", "psx", 10)], ["Game"])
 
