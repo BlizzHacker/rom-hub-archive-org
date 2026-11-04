@@ -264,9 +264,14 @@ class FileSets:
         for source in selected:
             by_item.setdefault((source.identifier, source.archive), []).append(source)
         ranked = []
+        unavailable = []
         for (identifier, archive), choices in by_item.items():
-            entries = (self._zip_files(identifier, archive) if archive
-                       else self._files(identifier))
+            try:
+                entries = (self._zip_files(identifier, archive) if archive
+                           else self._files(identifier))
+            except FileSetError as exc:
+                unavailable.append(str(exc))
+                continue
             for entry in entries:
                 if not _payload(entry):
                     continue
@@ -299,6 +304,16 @@ class FileSets:
                     continue
                 ranked.append((-points, len(name), name.casefold(), result))
         ranked.sort(key=lambda item: item[:3])
+        if unavailable:
+            # Failure of one restricted ZIP must not suppress matches from
+            # another configured source. But never report "no matches" when
+            # the actual issue was an inaccessible set or a truncated index.
+            if not ranked:
+                raise FileSetError("file-set search unavailable: " +
+                                   "; ".join(unavailable))
+            import sys
+            for message in unavailable:
+                print(f"archive-org file-set skipped: {message}", file=sys.stderr)
         return [row[3] for row in ranked[:limit]]
 
     def plan(self, result: SearchResult) -> FetchPlan:
