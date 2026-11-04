@@ -353,11 +353,20 @@ and directory are discovered from the item's `metadata/{id}/d1` and
 accepted unless it matches an expected IA storage host and item path.
 The plugin extracts only canonical `archive.org/download/<item>/<zip>/<member>`
 links and produces one search result per supported ROM payload. At grab time it revalidates the file and
-returns an exact HTTP `FetchPlan`. Compatible single-disc CHDs or other
-images are retrieved individually; where an adjacent matching `.m3u`
-exists, the plan includes the playlist and all identically named, numbered
-discs. Bare `.bin/.cue` or `.gdi` sets are still out of scope. ZIPs
-containing another monolithic archive are not inspected recursively.
+returns an exact HTTP `FetchPlan`. Direct item files and ZIP members use
+the same longest-folder-prefix platform resolver for search, census and
+import (for example, `item:psx` plus `item/PS2:ps2` makes `PS2/Game.iso`
+a PS2 game, never a PSX match).
+
+An adjacent, same-family `.m3u` is fetched at **plan time** and parsed.
+Only the playlist and the referenced sibling image files are downloaded.
+A missing disc, unreferenced selected disc, ambiguous playlist, unsafe
+or nested reference, foreign URL, unsupported extension, or invalid payload
+refuses the plan; alternative images not referenced by the playlist are not
+included. UTF-8 BOMs, comments, blank lines, CRLF, and optional `./` prefixes
+are supported. Without a matching playlist, a disc image is handled alone.
+Bare `.bin/.cue` or `.gdi` sets remain out of scope, as do nested playlist
+layouts and archives contained inside archives.
 
 The parent item's file manifest uses paginated Archive.org metadata.
 The inner ZIP directory view is a single HTML response, which must fit
@@ -376,9 +385,39 @@ and attaches them to Archive.org HTTP requests for both ZIP listings and
 individual downloads. No `ia.ini` or IA CLI is required. Passwords are kept
 in the existing ROM Hub secret store (UI mode) or read from external files;
 they never enter the sandboxed plugin. A login does not override item
-restrictions. Never put credentials in `file_sets`, URLs or manifests.
+restrictions, and an authenticated live download has not yet been verified.
+Never put credentials in `file_sets`, URLs or manifests.
 
-The default `file_sets=[]` keeps the original item-title search unchanged.
+Search continues combining file-set and item-title matches when one path
+fails. If both paths yield no results and an attempted path was unavailable,
+the search fails with context rather than claiming no matches. Diagnostics
+for failures accompanying successful results are written to plugin stderr;
+the current host does not surface them as search-result warnings.
+
+### Catalogue census and rebuilds
+
+The `rom-hub census build archive-org` catalogue includes configured direct
+item files and ZIP members, not only Archive.org item-level records. Each
+`(identifier, ZIP-or-none)` has a separate unit: overlapping folder mappings
+never duplicate a member. Member record IDs are **identical** to the
+`set:...` or `zip:...` IDs returned by live searches, so cached matches
+can be planned by the importer without a live search. ZIP units have no
+independent declared member count; their completeness denominator is marked
+unknown, rather than inferred from filtered game results. Direct item units
+use Archive.org's `files_count` including non-game and out-of-scope entries
+that are explicitly counted as skips. Item-level collection counts and
+file-member counts should not be added into a unique-game total.
+
+Run `rom-hub census build archive-org` again after changing `file_sets`
+(or after upgrading this plugin with an existing catalogue). A rebuilt scope
+removes deleted mappings; changed folder/platform scopes use different
+unit identities. The host refreshes completed units whose declared count
+was unknown while retaining resumable partial units. Configuration changes
+do **not** automatically invalidate a previously built catalogue: rebuild
+it explicitly to make ordinary cached searches reflect the changes.
+
+The default `file_sets=[]` keeps the original item-title search and
+item-size census windows unchanged.
 
 
 ## Install
@@ -395,6 +434,8 @@ The default `file_sets=[]` keeps the original item-title search unchanged.
 | `collection` | `str` | `"Archive.org"` | RomM collection imported ROMs are grouped into |
 | `downloadable_only` | `bool` | `false` | drop `stream_only` items from search — for bulk importing, where seeing items the importer will refuse is noise |
 | `max_rows` | `int` | `50000` | ceiling on a single bulk request, so a typo cannot ask Archive.org for a million rows |
+| `file_sets` | `list[str]` | `[]` | explicitly mapped item folders and ZIP member folders |
+| `max_set_files` | `int` | `8000` | maximum files in a configured item or ZIP listing |
 
 ## How the importer routes
 
