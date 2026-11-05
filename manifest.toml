@@ -1,7 +1,7 @@
 [plugin]
 slug        = "archive-org"
 name        = "Archive.org"
-version     = "0.4.0"
+version     = "0.4.1"
 rpp_version = "1"
 license     = "MIT"
 
@@ -21,7 +21,8 @@ collections       = { type = "list[str]", default = ["softwarelibrary", "console
 collection        = { type = "str", default = "Archive.org" }
 downloadable_only = { type = "bool", default = false }
 max_rows          = { type = "int", default = 50000 }
-# Opt-in search of item files and ZIP members, with bounded listing sizes.
+# Opt-in file-level search. Each item[/folder]:romm-platform entry is a
+# particular Archive.org *item*, not an advancedsearch collection.
 file_sets         = { type = "list[str]", default = [] }
 max_set_files     = { type = "int", default = 8000 }
 # One collection, not the search scope's list: a census partitions a
