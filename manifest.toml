@@ -21,8 +21,7 @@ collections       = { type = "list[str]", default = ["softwarelibrary", "console
 collection        = { type = "str", default = "Archive.org" }
 downloadable_only = { type = "bool", default = false }
 max_rows          = { type = "int", default = 50000 }
-# Opt-in search of item files and ZIP members, with bounded listing sizes.
-file_sets         = { type = "list[str]", default = [] }
+file_sets         = { type = "list[str]", default = ["retro-roms-best-set/Sony - PS1 (A-L).zip:psx", "tiny-best-set-go/tiny-best-set-go-expansion-128-games.zip/Roms/PS:psx"] }
 max_set_files     = { type = "int", default = 8000 }
 # One collection, not the search scope's list: a census partitions a
 # single collection by item_size and reconciles its windows against that

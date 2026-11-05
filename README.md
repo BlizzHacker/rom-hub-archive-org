@@ -338,6 +338,13 @@ verified live.
 | `collection` | `str` | `"Archive.org"` | RomM collection imported ROMs are grouped into |
 | `downloadable_only` | `bool` | `false` | drop `stream_only` items from search — for bulk importing, where seeing items the importer will refuse is noise |
 | `max_rows` | `int` | `50000` | ceiling on a single bulk request, so a typo cannot ask Archive.org for a million rows |
+| `file_sets` | `list[str]` | two PSX ZIP mappings | Archive.org ZIP members to search and include in the census; set `[]` to disable |
+
+The default mappings cover `Sony - PS1 (A-L).zip` in `retro-roms-best-set`
+and `Roms/PS` inside `tiny-best-set-go-expansion-128-games.zip` in
+`tiny-best-set-go`. Run `rom-hub census build archive-org` after installing or
+upgrading to include their members in the local catalogue. A live search can
+use them immediately with `rom-hub search "Crash Bandicoot 2" --platform psx --live`.
 
 ## How the importer routes
 
