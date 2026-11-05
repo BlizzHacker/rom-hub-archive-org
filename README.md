@@ -324,61 +324,7 @@ still works. Terms are quoted, which makes Lucene's operators literal — real
 titles like `r-type` and `sonic & knuckles` need no special handling and were
 verified live.
 
-## Search inside Archive.org ROM sets (opt-in)
-
-The original provider searches **item titles**. This extension searches
-**both individual files of an Archive.org item and individual members of an
-Archive.org ZIP** exposed through its "View Contents" page. It uses HTTP
-manifests and links rather than downloading the entire archive to inspect it.
-
-Configure which items and ZIP files to search via the same ROM Hub plugin:
-
-```bash
-rom-hub plugin config archive-org --set 'file_sets=retro-roms-best-set/Sony - PS1 (A-L).zip:psx,tiny-best-set-go/tiny-best-set-go-expansion-128-games.zip/Roms/PS:psx'
-rom-hub search "Crash Bandicoot 2" --platform psx
-```
-
-Each comma-separated entry is `identifier[/path]:romm-platform`. The
-optional path can name a folder **directly inside the item**, a
-`.zip` file inside the item, or a folder **inside that ZIP**. We do not
-infer which console a folder represents. Configure only items you know
-and have permission to access. Archive.org's regular search indexes
-items, not every file inside arbitrary ZIPs, so set discovery requires
-the operator to name the sources.
-
-ZIP listings are retrieved from the item's canonical Archive.org
-storage host through `view_archive.php?archive=...`. The storage hostname
-and directory are discovered from the item's `metadata/{id}/d1` and
-`metadata/{id}/dir` fields; neither is hardcoded, and neither is
-accepted unless it matches an expected IA storage host and item path.
-The plugin extracts only canonical `archive.org/download/<item>/<zip>/<member>`
-links and produces one search result per supported ROM payload. At grab time it revalidates the file and
-returns an exact HTTP `FetchPlan`. Direct item files and ZIP members use
-the same longest-folder-prefix platform resolver for search, census and
-import (for example, `item:psx` plus `item/PS2:ps2` makes `PS2/Game.iso`
-a PS2 game, never a PSX match).
-
-An adjacent, same-family `.m3u` is fetched at **plan time** and parsed.
-Only the playlist and the referenced sibling image files are downloaded.
-A missing disc, unreferenced selected disc, ambiguous playlist, unsafe
-or nested reference, foreign URL, unsupported extension, or invalid payload
-refuses the plan; alternative images not referenced by the playlist are not
-included. UTF-8 BOMs, comments, blank lines, CRLF, and optional `./` prefixes
-are supported. Without a matching playlist, a disc image is handled alone.
-Bare `.bin/.cue` or `.gdi` sets remain out of scope, as do nested playlist
-layouts and archives contained inside archives.
-
-When a ZIP is explicitly configured for member search, the parent ZIP is
-not offered as an individual game by a broader direct-item mapping. Its
-members are catalogued separately, and the parent file is counted as an
-explained skip in the direct-file census.
-
-The parent item's file manifest uses paginated Archive.org metadata.
-The inner ZIP directory view is a single HTML response, which must fit
-ROM Hub's 4 MiB broker limit. `max_set_files` (default 8,000) refuses
-oversized listings; ZIPs without View Contents, 403-restricted listings
-and responses that exceed the host limit fail rather than silently
-claiming to have indexed the full set.
+## ROMarr host-side authentication
 
 **Authentication:** The plugin never receives credentials. With
 [ROMarr's host-side authentication feature](https://github.com/dgmora/romarr/pull/6),
@@ -392,40 +338,6 @@ in the existing ROM Hub secret store (UI mode) or read from external files;
 they never enter the sandboxed plugin. A login does not override item
 restrictions, and an authenticated live download has not yet been verified.
 Never put credentials in `file_sets`, URLs or manifests.
-
-Search continues combining file-set and item-title matches when one path
-fails. If both paths yield no results and an attempted path was unavailable,
-the search fails with context rather than claiming no matches. Diagnostics
-for failures accompanying successful results are written to plugin stderr;
-the current host does not surface them as search-result warnings.
-
-### Catalogue census and rebuilds
-
-The `rom-hub census build archive-org` catalogue includes configured direct
-item files and ZIP members, not only Archive.org item-level records. Each
-`(identifier, ZIP-or-none)` has a separate unit: overlapping folder mappings
-never duplicate a member. Member record IDs are **identical** to the
-`set:...` or `zip:...` IDs returned by live searches, so cached matches
-can be planned by the importer without a live search. ZIP units have no
-independent declared member count; their completeness denominator is marked
-unknown, rather than inferred from filtered game results. Direct item units
-use Archive.org's `files_count` including non-game and out-of-scope entries
-that are explicitly counted as skips. The census report counts Archive.org items in its original size windows,
-direct file entries in direct-file units, and ZIP member entries in ZIP units.
-These are different inventory levels, so a global sum of entries is **not**
-a count of unique games. ZIP member totals remain unmeasured without an
-independent member denominator.
-
-Run `rom-hub census build archive-org` again after changing `file_sets`
-(or after upgrading this plugin with an existing catalogue). A rebuilt scope
-removes deleted mappings; changed folder/platform scopes use different
-unit identities. The host refreshes completed units whose declared count
-was unknown while retaining resumable partial units. Configuration changes
-do **not** automatically invalidate a previously built catalogue: rebuild
-it explicitly to make ordinary cached searches reflect the changes.
-
-The default `file_sets=[]` keeps the original item-title search and
-item-size census windows unchanged.
 
 
 ## Install
@@ -442,8 +354,75 @@ item-size census windows unchanged.
 | `collection` | `str` | `"Archive.org"` | RomM collection imported ROMs are grouped into |
 | `downloadable_only` | `bool` | `false` | drop `stream_only` items from search — for bulk importing, where seeing items the importer will refuse is noise |
 | `max_rows` | `int` | `50000` | ceiling on a single bulk request, so a typo cannot ask Archive.org for a million rows |
-| `file_sets` | `list[str]` | `[]` | explicitly mapped item folders and ZIP member folders |
-| `max_set_files` | `int` | `8000` | maximum files in a configured item or ZIP listing |
+| `file_sets` | `list[str]` | `["retro-roms-best-set", "tiny-best-set-go"]` | Items whose files and ZIP members are searched and catalogued; `[]` disables file-set search |
+| `max_set_files` | `int` | `8000` | Maximum entries per item manifest or ZIP listing |
+
+### File-set discovery
+
+An item identifier enables automatic discovery of its supported direct files
+and ZIP members. Platform labels in directory and archive names, such as
+`PS`, `FC`, `Sony - PS1 (A-L).zip` and `Sony - PSP (A-G).zip`, assign the
+platform. The shared aliases are in `archive_org/set_platforms.py`.
+Conflicting or unknown labels are skipped; generic extensions and game titles
+are not platform evidence. Search matches the individual filename, without
+resolving a canonical game database ID.
+
+    rom-hub plugin config archive-org --set 'file_sets=["retro-roms-best-set","tiny-best-set-go"]'
+
+Entries may also scope discovery to a folder or ZIP, for example
+`item/folder/games.zip/Roms`. An explicit `:platform` suffix overrides automatic
+assignment for that scope, such as `item/games.zip/Roms/PS:psx`. Existing
+explicit mappings retain their behavior and use the longest matching scope.
+
+Automatic discovery accepts five directory levels in total, counting folders
+before and inside a ZIP, excluding the item and archive/payload filenames.
+It inspects one ZIP boundary using Archive.org's View Contents listing; it
+does not download the whole ZIP to index it or open archives inside ZIPs.
+Inner game ZIPs remain downloadable payloads. Raw BIN/CUE/GDI groups remain
+unsupported. A matching adjacent M3U must name safe, existing sibling images;
+planning includes exactly that playlist and its referenced images.
+
+Run `rom-hub census build archive-org` after upgrading or changing sources or
+platform aliases. Automatic items are resumable census units; scope discovery
+does not fetch ZIP listings. ZIP coverage has no independent denominator and
+is reported as unknown. Counts represent entries, not unique games.
+
+HTTP 401/403 and unreadable listings are controlled resource failures. Access
+may require an authorized Archive.org session in the host; a browser login
+does not authenticate the host. This plugin does not store credentials. Live
+search preserves accessible matches and writes partial failures to plugin
+diagnostics. If no matches survive a failed resource, search reports a source
+error. The current host does not display partial plugin warnings alongside
+successful results. Restricted census units remain incomplete and their
+errors appear in the report; other units continue. A readable listing does
+not guarantee a later download will be authorized.
+
+Broad live searches have a 20-second discovery budget checked between listing
+requests, in addition to the host's HTTP and execution limits. Use the census
+for repeated searches; a slow individual request can still reach host limits.
+
+### Checking the catalogue
+
+Use the installed revision and effective configuration you intend to test:
+
+    rom-hub plugin config archive-org
+    rom-hub census build archive-org --units --verbose
+    rom-hub census report archive-org --units
+    rom-hub search "Crisis Core" --platform psp --all-variants
+    rom-hub search "Crisis Core" --platform psp --all-variants --live
+    rom-hub search "Final Fantasy VIII" --platform psx --all-variants
+    rom-hub search "Final Fantasy VIII" --platform psx --all-variants --live
+
+Inspect unit failures and skip reasons, and confirm the ordinary search says
+it answered from a built catalogue. Search can fall back to live results;
+results alone do not prove that the catalogue contains the game. Unknown ZIP
+coverage and restricted units must not be described as verified completeness.
+The initial census also enumerates `census_collection` and can take minutes.
+
+ROMarr currently calls live plugin search rather than consuming this CLI
+catalogue. Test its installed plugin, service account, `ROM_HUB_HOME` and
+host session separately. A correct fetch plan proves the chosen URLs and
+platform; only an authorized download verifies access to the payload.
 
 ## How the importer routes
 

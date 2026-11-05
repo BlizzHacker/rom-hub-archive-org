@@ -114,6 +114,7 @@ from .index import (
     size_window,
 )
 from .platforms import platform_for
+from .set_platforms import ALIASES, MAX_FOLDER_DEPTH
 from .file_sets import FileSets, FileSetError, PAGE_SIZE as SET_PAGE_SIZE, METADATA as SET_METADATA, _get
 from urllib.parse import quote
 
@@ -347,20 +348,55 @@ class Census(CensusProvider):
         file_sets = FileSets(self.ctx.http, self.ctx.config or {})
         units = []
         for (identifier, archive), choices in file_sets.resources().items():
-            mapping = sorted((source.prefix, source.platform) for source in choices)
-            canonical = json.dumps([identifier, archive, mapping],
+            mapping = sorted(((source.prefix, source.platform) for source in choices),
+                             key=lambda pair: (pair[0], pair[1] or ""))
+            canonical = json.dumps([identifier, archive, mapping, sorted(ALIASES.items()), MAX_FOLDER_DEPTH],
                                    ensure_ascii=True, separators=(",", ":"))
             digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             units.append(("file-set:" + digest, identifier, archive))
         return sorted(units)
 
-    def _file_page(self, unit: CensusUnit, cursor: str | None) -> CensusPage:
+    def _automatic_page(self, unit, identifier, cursor):
+        sets = FileSets(self.ctx.http, self.ctx.config or {})
+        try:
+            archives = [None] + sets.automatic_archives(identifier)
+            fingerprint = hashlib.sha256(json.dumps(
+                [archives, [e.get("name") for e in sets._files(identifier)
+                            if isinstance(e, dict)]]).encode()).hexdigest()[:24]
+            position, inner = 0, None
+            if cursor is not None:
+                try:
+                    position, inner, previous = json.loads(cursor)
+                    if inner is not None and not isinstance(inner, str):
+                        raise ValueError("invalid inner cursor")
+                    if type(position) is not int or not 0 <= position < len(archives):
+                        raise ValueError("invalid archive position")
+                    if previous != fingerprint:
+                        raise ValueError("archive manifest changed; rebuild this unit")
+                except (ValueError, TypeError) as exc:
+                    raise CensusUnavailable(f"invalid automatic discovery cursor: {exc}") from exc
+            page = self._file_page(unit, inner, _resource=(identifier, archives[position]))
+            if page.cursor is None:
+                position += 1
+            next_cursor = (json.dumps([position, page.cursor, fingerprint], separators=(",", ":"))
+                           if position < len(archives) else None)
+            return CensusPage(records=page.records, skipped=page.skipped,
+                              cursor=next_cursor, declared_total=None)
+        except FileSetError as exc:
+            raise CensusUnavailable(f"Archive.org automatic item {identifier}: {exc}") from exc
+
+    def _file_page(self, unit: CensusUnit, cursor: str | None, _resource=None) -> CensusPage:
         resources = {key: (item, archive)
                      for key, item, archive in self._file_units()}
         if unit.unit_id not in resources:
             raise CensusUnavailable(
                 f"file-set unit {unit.unit_id!r} is no longer configured; rebuild the catalogue")
-        identifier, archive = resources[unit.unit_id]
+        identifier, archive = _resource or resources[unit.unit_id]
+        configured = FileSets(self.ctx.http, self.ctx.config or {})
+        if (_resource is None and archive is None and any(
+                source.identifier == identifier and source.archive is None
+                and source.platform is None for source in configured.configured)):
+            return self._automatic_page(unit, identifier, cursor)
         sets = FileSets(self.ctx.http, self.ctx.config or {})
         try:
             if archive is not None:
@@ -440,6 +476,8 @@ class Census(CensusProvider):
                     reason = (SKIP_SET_PARENT_ZIP
                               if archive is None and isinstance(entry, dict)
                               and sets.indexes_zip_members(identifier, entry.get("name"))
+                              else sets.skip_reason(identifier, archive, entry)
+                              if any(source.platform is None for source in sets.configured)
                               else SKIP_SET_EXCLUDED)
                 elif len(result.source_id) > 600 or len(result.title) > 500:
                     reason = SKIP_SET_UNREPRESENTABLE

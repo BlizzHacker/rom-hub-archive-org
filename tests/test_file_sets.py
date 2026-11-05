@@ -224,7 +224,7 @@ class FileSetTests(unittest.TestCase):
                 sets.plan(found)
 
     def test_rejects_invalid_config_and_oversize_manifest(self):
-        for entry in ("set-one/../PSX:psx", "set-one", "set-one:PSX",
+        for entry in ("set-one/../PSX:psx", "set-one:PSX",
                       "/root:psx", "set-one/x//y:psx"):
             with self.subTest(entry=entry), self.assertRaises(FileSetError):
                 SetSource.parse(entry)

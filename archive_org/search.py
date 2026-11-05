@@ -117,8 +117,6 @@ class Search(SearchProvider):
         config = self.ctx.config or {}
         collections = config.get("collections") or DEFAULT_COLLECTIONS
         downloadable_only = bool(config.get("downloadable_only"))
-        # File-level search is opt-in; an empty file_sets list leaves the
-        # original item search completely unchanged.
         file_sets = FileSets(self.ctx.http, config) if config.get("file_sets") else None
 
         if limit > MAX_RESULTS:
@@ -137,7 +135,7 @@ class Search(SearchProvider):
         if wanted:
             emulators = emulators_for(wanted)
             if not emulators and not (file_sets and any(
-                    source.platform == wanted for source in file_sets.configured)):
+                    source.platform in (None, wanted) for source in file_sets.configured)):
                 raise SearchRefused(
                     f"this plugin files nothing under the platform {wanted!r}: "
                     f"no Archive.org emulator maps to it in platforms.py, and no file_sets "
