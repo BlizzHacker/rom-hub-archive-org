@@ -231,6 +231,10 @@ SKIP_VANISHED = (
 
 class CensusUnavailable(Exception):
     """A window could not be read, and the message says which part."""
+    def __init__(self, message, *, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 
 @contextmanager
@@ -364,22 +368,40 @@ class Census(CensusProvider):
                 [archives, [e.get("name") for e in sets._files(identifier)
                             if isinstance(e, dict)]]).encode()).hexdigest()[:24]
             position, inner = 0, None
+            failures, first_error = 0, ""
             if cursor is not None:
                 try:
-                    position, inner, previous = json.loads(cursor)
+                    saved = json.loads(cursor)
+                    position, inner, previous = saved[:3]
+                    if len(saved) == 5:
+                        failures, first_error = saved[3:]
+                        if type(failures) is not int or failures < 0 or not isinstance(first_error, str):
+                            raise ValueError("invalid failure summary")
+                    elif len(saved) != 3:
+                        raise ValueError("invalid cursor fields")
                     if inner is not None and not isinstance(inner, str):
                         raise ValueError("invalid inner cursor")
-                    if type(position) is not int or not 0 <= position < len(archives):
+                    if type(position) is not int or not 0 <= position <= len(archives):
                         raise ValueError("invalid archive position")
                     if previous != fingerprint:
                         raise ValueError("archive manifest changed; rebuild this unit")
                 except (ValueError, TypeError) as exc:
                     raise CensusUnavailable(f"invalid automatic discovery cursor: {exc}") from exc
-            page = self._file_page(unit, inner, _resource=(identifier, archives[position]))
+            if position == len(archives):
+                raise CensusUnavailable(f"{identifier}: {failures} archive failures; first: {first_error}")
+            try:
+                page = self._file_page(unit, inner, _resource=(identifier, archives[position]))
+            except CensusUnavailable as exc:
+                if archives[position] is None or exc.status_code == 403:
+                    raise
+                failures += 1
+                first_error = first_error or str(exc)[:150]
+                page = CensusPage(records=[], cursor=None, declared_total=None)
+
             if page.cursor is None:
                 position += 1
-            next_cursor = (json.dumps([position, page.cursor, fingerprint], separators=(",", ":"))
-                           if position < len(archives) else None)
+            next_cursor = (json.dumps([position, page.cursor, fingerprint, failures, first_error], separators=(",", ":"))
+                           if position < len(archives) or failures else None)
             return CensusPage(records=page.records, skipped=page.skipped,
                               cursor=next_cursor, declared_total=None)
         except FileSetError as exc:
@@ -499,7 +521,8 @@ class Census(CensusProvider):
                               declared_total=declared, skipped=skipped)
         except FileSetError as exc:
             raise CensusUnavailable(
-                f"Archive.org file-set {identifier}/{archive or '(direct files)'}: {exc}"
+                f"Archive.org file-set {identifier}/{archive or '(direct files)'}: {exc}",
+                status_code=exc.status_code
             ) from exc
 
     # -- walking --------------------------------------------------------

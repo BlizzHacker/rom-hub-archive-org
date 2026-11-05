@@ -44,6 +44,10 @@ _BLOCKED = ("is_dark", "hidden")
 
 class FileSetError(Exception):
     """Invalid configuration or a set that cannot be indexed safely."""
+    def __init__(self, message, *, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 
 @dataclass(frozen=True)
@@ -165,9 +169,11 @@ def _get(http, url: str):
         raise FileSetError(f"Archive.org broker request failed for {url}: {exc}") from exc
     if response.status_code in (401, 403):
         raise FileSetError(f"restricted access (HTTP {response.status_code}) for {url}; "
-                           "an authorized host-side Archive.org session may be required")
+                           "an authorized host-side Archive.org session may be required",
+                           status_code=response.status_code)
     if response.status_code != 200:
-        raise FileSetError(f"Archive.org returned HTTP {response.status_code} for {url}")
+        raise FileSetError(f"Archive.org returned HTTP {response.status_code} for {url}",
+                           status_code=response.status_code)
     try:
         body = response.json()
     except ValueError as exc:
@@ -269,7 +275,7 @@ class FileSets:
             result = zip_members(self.http, url, identifier, archive,
                                  max_entries=self.max_files)
         except ZipListingError as exc:
-            raise FileSetError(str(exc)) from exc
+            raise FileSetError(str(exc), status_code=exc.status_code) from exc
         self._zip_cache[key] = result
         return result
 
@@ -365,7 +371,10 @@ class FileSets:
                                  for archive in self.automatic_archives(identifier))
             except FileSetError as exc:
                 unavailable.append(f"{identifier}: {exc}")
+        forbidden_items = set()
         for (identifier, archive), choices in resources:
+            if archive and identifier in forbidden_items:
+                continue
             if platform and not any(s.platform in (None, platform) for s in choices):
                 continue
             if (archive and platform and all(s.platform is None for s in choices)
@@ -376,6 +385,8 @@ class FileSets:
                            else self._files(identifier))
             except FileSetError as exc:
                 unavailable.append(f"{identifier}/{archive or '(direct files)'}: {exc}")
+                if archive and exc.status_code == 403:
+                    forbidden_items.add(identifier)
                 continue
             for entry in entries:
                 result = self.result(identifier, archive, entry)

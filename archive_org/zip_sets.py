@@ -15,7 +15,11 @@ from urllib.parse import quote, unquote, urljoin, urlsplit
 
 
 class ZipListingError(ValueError):
-    pass
+
+    def __init__(self, message, *, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 
 class _MemberLinks(HTMLParser):
@@ -63,11 +67,13 @@ def zip_members(http, listing_url: str, item: str, archive: str,
         raise ZipListingError(
             f"Archive.org ZIP contents listing is restricted (HTTP "
             f"{response.status_code}); this provider needs authenticated "
-            f"host-side HTTP access for {item}/{archive}"
+            f"host-side HTTP access for {item}/{archive}",
+            status_code=response.status_code
         )
     if response.status_code != 200:
         raise ZipListingError(
-            f"Archive.org ZIP contents listing returned HTTP {response.status_code}"
+            f"Archive.org ZIP contents listing returned HTTP {response.status_code}",
+            status_code=response.status_code
         )
     parser = _MemberLinks(item, archive, max_entries)
     parser.feed(response.text)

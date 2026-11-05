@@ -139,3 +139,37 @@ class AutomaticTests(unittest.TestCase):
         census._index = lambda: FakeIndex()
         unit = next(u for u in census.scope() if u.unit_id.startswith('file-set:'))
         self.assertEqual(sum(census.enumerate(unit, None).skipped.values()), 3)
+
+    def test_forbidden_stops_zip_requests_for_only_that_item(self):
+        http, config, _ = self.fixture()
+        http.files.append({'name': 'Sony - PSP (H-P).zip'})
+        http.zip_status = 403
+        http.files.append({'name': 'PS/Accessible.chd'})
+        result = FileSets(http, config).search_outcome('', None, 10)
+        self.assertEqual([r.title for r in result.results], ['Accessible'])
+        self.assertEqual(len(result.failures), 1)
+        self.assertEqual(sum('view_archive.php' in u for u in http.requests), 1)
+
+    def test_census_continues_other_errors_but_remains_incomplete(self):
+        for status in (401, 404, 500):
+            with self.subTest(status=status):
+                http, config, ctx = self.fixture('Sony - PSP (A-G).zip')
+                http.files.append({'name': 'Sony - PSP (H-P).zip'})
+                original = http.get
+                def route(url):
+                    if 'view_archive.php' in url:
+                        if 'A-G' in url:
+                            return Reply('', status)
+                        return Reply('<a href="https://archive.org/download/set-one/'
+                                     'Sony%20-%20PSP%20%28H-P%29.zip/Working.iso">game</a>')
+                    return original(url)
+                http.get = route
+                census = Census(ctx)
+                census._index = lambda: FakeIndex()
+                unit = next(u for u in census.scope() if u.unit_id.startswith('file-set:'))
+                first = census.enumerate(unit, None)
+                failed_archive = Census(ctx).enumerate(unit, first.cursor)
+                good_archive = Census(ctx).enumerate(unit, failed_archive.cursor)
+                self.assertEqual([r.title for r in good_archive.records], ['Working'])
+                with self.assertRaisesRegex(CensusUnavailable, '1 archive failures'):
+                    Census(ctx).enumerate(unit, good_archive.cursor)

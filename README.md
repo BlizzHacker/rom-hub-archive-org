@@ -367,7 +367,27 @@ Conflicting or unknown labels are skipped; generic extensions and game titles
 are not platform evidence. Search matches the individual filename, without
 resolving a canonical game database ID.
 
-    rom-hub plugin config archive-org --set 'file_sets=["retro-roms-best-set","tiny-best-set-go"]'
+The two default items are already enabled on a fresh installation. Optional
+custom lists use comma-separated CLI values, for example:
+
+    rom-hub plugin config archive-org --set 'file_sets=another-item,another-item/PS:psx'
+
+ROM Hub preserves saved configuration during upgrades, including an empty
+list that disables discovery. To restore this field from the installed
+manifest defaults without naming the sets manually (also works in fish):
+
+```sh
+python -c '
+from rom_hub.cli import default_root
+from rom_hub.registry import Registry
+registry = Registry(default_root())
+plugin = registry.get("archive-org")
+config = dict(plugin.config)
+config["file_sets"] = plugin.manifest.config_schema["file_sets"]["default"]
+registry.set_config(plugin.slug, config)
+print("Restored file_sets:", config["file_sets"])
+'
+```
 
 Entries may also scope discovery to a folder or ZIP, for example
 `item/folder/games.zip/Roms`. An explicit `:platform` suffix overrides automatic
@@ -393,7 +413,9 @@ does not authenticate the host. This plugin does not store credentials. Live
 search preserves accessible matches and writes partial failures to plugin
 diagnostics. If no matches survive a failed resource, search reports a source
 error. The current host does not display partial plugin warnings alongside
-successful results. Restricted census units remain incomplete and their
+successful results. HTTP 403 stops further ZIP probes for that item. Other archive errors allow
+census discovery to continue, retaining an incomplete unit and an error summary.
+Restricted census units remain incomplete and their
 errors appear in the report; other units continue. A readable listing does
 not guarantee a later download will be authorized.
 
