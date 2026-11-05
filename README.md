@@ -324,21 +324,24 @@ still works. Terms are quoted, which makes Lucene's operators literal — real
 titles like `r-type` and `sonic & knuckles` need no special handling and were
 verified live.
 
-## ROMarr host-side authentication
+## Shared host authentication
 
-**Authentication:** The plugin never receives credentials. With
-[ROMarr's host-side authentication feature](https://github.com/dgmora/romarr/pull/6),
-users enter their Archive.org email/password in ROMarr's UI or supply
-`ROMARR_ARCHIVE_ORG_EMAIL_FILE` and `ROMARR_ARCHIVE_ORG_PASSWORD_FILE`
-from an external secret manager. ROMarr signs in through IA's official
-`xauthn` endpoint, caches cookies in memory only, refreshes them as needed,
-and attaches them to Archive.org HTTP requests for both ZIP listings and
-individual downloads. No `ia.ini` or IA CLI is required. Passwords are kept
-in the existing ROM Hub secret store (UI mode) or read from external files;
-they never enter the sandboxed plugin. A login does not override item
-restrictions, and an authenticated live download has not yet been verified.
+[ROM Hub's shared authentication](https://github.com/dgmora/rom-hub/pull/1)
+supports the standalone CLI and [ROMarr's UI](https://github.com/dgmora/romarr/pull/6).
+Use `rom-hub auth login archive-org` in your CLI environment, or enter credentials
+in ROMarr's installed Archive.org plugin card. External secret files use
+`ROM_HUB_ARCHIVE_ORG_EMAIL_FILE` and `ROM_HUB_ARCHIVE_ORG_PASSWORD_FILE`;
+legacy `ROMARR_ARCHIVE_ORG_*` names remain supported.
+
+Credentials use the existing ROM Hub secret store or external files. Cookies
+stay in host memory and authenticate listings, fresh plans and selected payloads.
+The plugin receives neither credentials nor cookies through its protocol.
+The sandbox does not prevent malicious plugins reading same-user files; a file
+store key beside its ciphertext protects against accidental disclosure only.
+No `ia.ini` or IA CLI is required. CLI and service state are separate unless
+configured with the same home and store settings. A login does not override
+item restrictions; an authenticated live download remains unverified.
 Never put credentials in `file_sets`, URLs or manifests.
-
 
 ## Install
 
