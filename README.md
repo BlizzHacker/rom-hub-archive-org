@@ -324,102 +324,6 @@ still works. Terms are quoted, which makes Lucene's operators literal — real
 titles like `r-type` and `sonic & knuckles` need no special handling and were
 verified live.
 
-## Search inside Archive.org ROM sets (opt-in)
-
-The original provider searches **item titles**. This extension searches
-**both individual files of an Archive.org item and individual members of an
-Archive.org ZIP** exposed through its "View Contents" page. It uses HTTP
-manifests and links rather than downloading the entire archive to inspect it.
-
-Configure which items and ZIP files to search via the same ROM Hub plugin:
-
-```bash
-rom-hub plugin config archive-org --set 'file_sets=retro-roms-best-set/Sony - PS1 (A-L).zip:psx,tiny-best-set-go/tiny-best-set-go-expansion-128-games.zip/Roms/PS:psx'
-rom-hub search "Crash Bandicoot 2" --platform psx
-```
-
-Each comma-separated entry is `identifier[/path]:romm-platform`. The
-optional path can name a folder **directly inside the item**, a
-`.zip` file inside the item, or a folder **inside that ZIP**. We do not
-infer which console a folder represents. Configure only items you know
-and have permission to access. Archive.org's regular search indexes
-items, not every file inside arbitrary ZIPs, so set discovery requires
-the operator to name the sources.
-
-ZIP listings are retrieved from the item's canonical Archive.org
-storage host through `view_archive.php?archive=...`. The storage hostname
-and directory are discovered from the item's `metadata/{id}/d1` and
-`metadata/{id}/dir` fields; neither is hardcoded, and neither is
-accepted unless it matches an expected IA storage host and item path.
-The plugin extracts only canonical `archive.org/download/<item>/<zip>/<member>`
-links and produces one search result per supported ROM payload. At grab time it revalidates the file and
-returns an exact HTTP `FetchPlan`. Direct item files and ZIP members use
-the same longest-folder-prefix platform resolver for search, census and
-import (for example, `item:psx` plus `item/PS2:ps2` makes `PS2/Game.iso`
-a PS2 game, never a PSX match).
-
-An adjacent, same-family `.m3u` is fetched at **plan time** and parsed.
-Only the playlist and the referenced sibling image files are downloaded.
-A missing disc, unreferenced selected disc, ambiguous playlist, unsafe
-or nested reference, foreign URL, unsupported extension, or invalid payload
-refuses the plan; alternative images not referenced by the playlist are not
-included. UTF-8 BOMs, comments, blank lines, CRLF, and optional `./` prefixes
-are supported. Without a matching playlist, a disc image is handled alone.
-Bare `.bin/.cue` or `.gdi` sets remain out of scope, as do nested playlist
-layouts and archives contained inside archives.
-
-The parent item's file manifest uses paginated Archive.org metadata.
-The inner ZIP directory view is a single HTML response, which must fit
-ROM Hub's 4 MiB broker limit. `max_set_files` (default 8,000) refuses
-oversized listings; ZIPs without View Contents, 403-restricted listings
-and responses that exceed the host limit fail rather than silently
-claiming to have indexed the full set.
-
-**Authentication:** The plugin never receives credentials. With
-[ROMarr's host-side authentication feature](https://github.com/dgmora/romarr/pull/6),
-users enter their Archive.org email/password in ROMarr's UI or supply
-`ROMARR_ARCHIVE_ORG_EMAIL_FILE` and `ROMARR_ARCHIVE_ORG_PASSWORD_FILE`
-from an external secret manager. ROMarr signs in through IA's official
-`xauthn` endpoint, caches cookies in memory only, refreshes them as needed,
-and attaches them to Archive.org HTTP requests for both ZIP listings and
-individual downloads. No `ia.ini` or IA CLI is required. Passwords are kept
-in the existing ROM Hub secret store (UI mode) or read from external files;
-they never enter the sandboxed plugin. A login does not override item
-restrictions, and an authenticated live download has not yet been verified.
-Never put credentials in `file_sets`, URLs or manifests.
-
-Search continues combining file-set and item-title matches when one path
-fails. If both paths yield no results and an attempted path was unavailable,
-the search fails with context rather than claiming no matches. Diagnostics
-for failures accompanying successful results are written to plugin stderr;
-the current host does not surface them as search-result warnings.
-
-### Catalogue census and rebuilds
-
-The `rom-hub census build archive-org` catalogue includes configured direct
-item files and ZIP members, not only Archive.org item-level records. Each
-`(identifier, ZIP-or-none)` has a separate unit: overlapping folder mappings
-never duplicate a member. Member record IDs are **identical** to the
-`set:...` or `zip:...` IDs returned by live searches, so cached matches
-can be planned by the importer without a live search. ZIP units have no
-independent declared member count; their completeness denominator is marked
-unknown, rather than inferred from filtered game results. Direct item units
-use Archive.org's `files_count` including non-game and out-of-scope entries
-that are explicitly counted as skips. Item-level collection counts and
-file-member counts should not be added into a unique-game total.
-
-Run `rom-hub census build archive-org` again after changing `file_sets`
-(or after upgrading this plugin with an existing catalogue). A rebuilt scope
-removes deleted mappings; changed folder/platform scopes use different
-unit identities. The host refreshes completed units whose declared count
-was unknown while retaining resumable partial units. Configuration changes
-do **not** automatically invalidate a previously built catalogue: rebuild
-it explicitly to make ordinary cached searches reflect the changes.
-
-The default `file_sets=[]` keeps the original item-title search and
-item-size census windows unchanged.
-
-
 ## Install
 
     rom-hub plugin install https://github.com/<you>/rom-hub-archive-org --ref v0.4.0
@@ -434,8 +338,6 @@ item-size census windows unchanged.
 | `collection` | `str` | `"Archive.org"` | RomM collection imported ROMs are grouped into |
 | `downloadable_only` | `bool` | `false` | drop `stream_only` items from search — for bulk importing, where seeing items the importer will refuse is noise |
 | `max_rows` | `int` | `50000` | ceiling on a single bulk request, so a typo cannot ask Archive.org for a million rows |
-| `file_sets` | `list[str]` | `[]` | explicitly mapped item folders and ZIP member folders |
-| `max_set_files` | `int` | `8000` | maximum files in a configured item or ZIP listing |
 
 ## How the importer routes
 
