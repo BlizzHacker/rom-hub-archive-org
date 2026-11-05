@@ -423,6 +423,23 @@ Broad live searches have a 20-second discovery budget checked between listing
 requests, in addition to the host's HTTP and execution limits. Use the census
 for repeated searches; a slow individual request can still reach host limits.
 
+### Host authentication
+
+Authentication is supplied by the host, outside plugin configuration. Hosts
+that support `rom-hub auth` can authenticate standalone CLI requests:
+
+    rom-hub auth login archive-org
+    rom-hub auth status archive-org
+
+Use the same `ROM_HUB_HOME` and secret-store settings for login, search, census
+and import. Existing hosts without this command need an authenticated host HTTP
+adapter; a browser login alone is insufficient. This plugin remains compatible
+with anonymous hosts and stores no credentials.
+
+The host may renew and retry a 401/403 once. If the final response is still
+403, this plugin stops further ZIP probes for the affected item and reports its
+census unit as incomplete. Authentication does not guarantee item access.
+
 ### Checking the catalogue
 
 Use the installed revision and effective configuration you intend to test:
