@@ -109,8 +109,8 @@ class FileSetTests(unittest.TestCase):
         sets, http = catalog(files, specs=["set-one/PSX:psx"])
         http.items["set-one"]["texts"] = {
             "PSX/Chronicles.m3u":
-                "#EXTM3U\\r\\nChronicles (Disc 1).chd\\r\\n"
-                "Chronicles (Disc 2).chd\\r\\n"
+                "#EXTM3U\r\nChronicles (Disc 1).chd\r\n"
+                "Chronicles (Disc 2).chd\r\n"
         }
         disc = next(r for r in sets.search("Chronicles", "psx", 10)
                     if "Disc%201" in r.source_id)

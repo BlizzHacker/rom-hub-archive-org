@@ -195,6 +195,12 @@ class FileSets:
         self.max_files = requested
         self._cache: dict[str, list[dict]] = {}
         self._zip_cache: dict[tuple[str, str], list[dict]] = {}
+        self._member_archives = {(source.identifier, source.archive)
+                                 for source in self.configured if source.archive}
+
+    def indexes_zip_members(self, identifier: str, name: str) -> bool:
+        """Whether a parent ZIP is indexed as individual ROMs elsewhere."""
+        return (identifier, name) in self._member_archives
 
     def _files(self, identifier: str) -> list[dict]:
         if identifier in self._cache:
@@ -289,6 +295,10 @@ class FileSets:
         if not _payload(entry):
             return None
         name = entry["name"]
+        # A ZIP configured for member search is a container, not another game.
+        # Apply this in result() so live search and census cannot disagree.
+        if archive is None and self.indexes_zip_members(identifier, name):
+            return None
         source = self.resolve(identifier, archive, name)
         if source is None:
             return None

@@ -3,7 +3,7 @@ import unittest
 
 from rom_hub_sdk import SearchResult
 
-from archive_org.census import Census, SKIP_SET_EXCLUDED
+from archive_org.census import Census, SKIP_SET_EXCLUDED, SKIP_SET_PARENT_ZIP
 from archive_org.file_sets import FileSets
 from archive_org.importer import Importer
 from test_file_sets import ArchiveHTTP, game
@@ -76,6 +76,30 @@ class CensusSetTests(unittest.TestCase):
         self.assertNotEqual(old_unit.unit_id, new_unit.unit_id)
         self.assertEqual(old.enumerate(old_unit, None).records[0].platform, "psx")
         self.assertEqual(new.enumerate(new_unit, None).records[0].platform, "ps2")
+
+    def test_configured_zip_is_one_container_not_a_direct_game(self):
+        http = FakeHTTP("set-one", "PSX.zip", ["Inside Game.chd", "readme.txt"])
+        http.files.append({"name": "Loose Game.chd", "size": "1234"})
+        mappings = ["set-one:psx", "set-one/PSX.zip:psx"]
+        sets = FileSets(http, {"file_sets": mappings})
+        results = sets.search("", "psx", 10)
+        self.assertEqual({r.title for r in results}, {"Loose Game", "Inside Game"})
+        self.assertEqual(len(results), 2)
+        self.assertFalse(any(r.source_id == "set:set-one:PSX.zip" for r in results))
+
+        census = self.census(http, mappings)
+        file_units = [u for u in census.scope() if u.unit_id.startswith("file-set:")]
+        self.assertEqual(len(file_units), 2)
+        pages = [census.enumerate(unit, None) for unit in file_units]
+        direct = next(page for page in pages if page.declared_total is not None)
+        zipped = next(page for page in pages if page.declared_total is None)
+        self.assertEqual(direct.declared_total, 2)
+        self.assertEqual([r.title for r in direct.records], ["Loose Game"])
+        self.assertEqual(direct.skipped[SKIP_SET_PARENT_ZIP], 1)
+        self.assertEqual([r.title for r in zipped.records], ["Inside Game"])
+        self.assertEqual(zipped.skipped[SKIP_SET_EXCLUDED], 1)
+        self.assertEqual({r.record_id for page in pages for r in page.records},
+                         {r.source_id for r in results})
 
     def test_zip_member_id_and_resumability(self):
         http = FakeHTTP("set-one", "PSX.zip", [

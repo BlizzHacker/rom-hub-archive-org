@@ -217,6 +217,7 @@ SKIP_SUB_COLLECTION = (
 SKIP_NO_IDENTIFIER = "the search index returned a document with no identifier"
 SKIP_UNREPRESENTABLE = "the item's metadata would not fit a catalogue record"
 SKIP_SET_EXCLUDED = "not a supported or safely named ROM within this file-set scope"
+SKIP_SET_PARENT_ZIP = "ZIP container indexed separately as individual ROM members"
 SKIP_SET_UNREPRESENTABLE = "file-set source identity or record exceeds SDK limits"
 SET_PAGE_ROWS = min(SET_PAGE_SIZE, 400)
 ZIP_PAGE_ROWS = 300
@@ -307,7 +308,7 @@ class Census(CensusProvider):
                 CensusUnit(
                     unit_id=size_clause(low, high),
                     label=(
-                        f"item_size {low:,} to "
+                        f"Archive.org items: item_size {low:,} to "
                         f"{'unbounded' if high == OPEN else format(high, ',')} "
                         f"bytes -- window {position} of {len(edges)} over a "
                         f"collection of {declared:,} items"
@@ -333,8 +334,8 @@ class Census(CensusProvider):
         for unit_id, identifier, archive in self._file_units():
             units.append(CensusUnit(
                 unit_id=unit_id,
-                label=("Archive.org file set: " + identifier +
-                       ("/" + archive if archive else " (direct files)"))[:500],
+                label=(("Archive.org ZIP member entries: " + identifier + "/" + archive)
+                       if archive else ("Archive.org direct file entries: " + identifier))[:500],
                 kind="roms",
                 declared_total=None,
                 platform=None,  # A unit may contain multiple platform folders.
@@ -436,7 +437,10 @@ class Census(CensusProvider):
                 result = sets.result(identifier, archive, entry)
                 reason = None
                 if result is None:
-                    reason = SKIP_SET_EXCLUDED
+                    reason = (SKIP_SET_PARENT_ZIP
+                              if archive is None and isinstance(entry, dict)
+                              and sets.indexes_zip_members(identifier, entry.get("name"))
+                              else SKIP_SET_EXCLUDED)
                 elif len(result.source_id) > 600 or len(result.title) > 500:
                     reason = SKIP_SET_UNREPRESENTABLE
                 else:
