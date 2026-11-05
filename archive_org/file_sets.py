@@ -1,18 +1,9 @@
-"""Search individual downloadable files of explicitly configured Archive.org items.
-
-Archive.org's advanced search indexes *items*, not files inside those items.
-The metadata API, however, exposes a paginated files manifest. This module
-makes each supported file a search result, and hands ROM Hub an exact file URL
-instead of asking it to fetch a whole ROM set.
-
-Set entries have the form "identifier[/folder]:romm-platform". The folder is
-optional; it scopes results within an item (and can distinguish platforms).
-No public collection is scanned or downloaded without explicit configuration.
-"""
+"""Search configured items and ZIP listings using explicit or inferred platforms."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 import sys
+import time
 import posixpath
 import re
 from urllib.parse import quote, unquote
@@ -21,6 +12,7 @@ from pydantic import ValidationError
 from rom_hub_sdk import FetchFile, FetchPlan, SearchResult
 
 from .zip_sets import ZipListingError, zip_members
+from .set_platforms import infer_platform, within_depth
 
 
 METADATA = "https://archive.org/metadata/"
@@ -58,21 +50,23 @@ class FileSetError(Exception):
 class SetSource:
     identifier: str
     prefix: str
-    platform: str
+    platform: str | None
     archive: str | None = None
 
     @classmethod
     def parse(cls, raw: str) -> "SetSource":
         path, separator, platform = str(raw).strip().rpartition(":")
+        if not separator:
+            path, platform = str(raw).strip(), None
         identifier, _, prefix = path.partition("/")
-        if (not separator or not _ITEM_ID.fullmatch(identifier)
-                or not _PLATFORM.fullmatch(platform)
+        if (not _ITEM_ID.fullmatch(identifier)
+                or (platform is not None and not _PLATFORM.fullmatch(platform))
                 or path.endswith("/") or prefix.startswith("/") or prefix.endswith("/")
                 or (prefix and any(segment in ("", ".", "..") for segment in prefix.split("/")))
                 or "\\" in prefix or any(ord(ch) < 32 for ch in prefix)):
             raise FileSetError(
                 f"invalid file_sets entry {raw!r}; expected "
-                "'Archive.org-identifier[/folder]:romm-platform'"
+                "'Archive.org-identifier[/folder-or-zip][:romm-platform]'"
             )
         parts = prefix.split("/") if prefix else []
         zip_index = next((i for i, part in enumerate(parts)
@@ -97,7 +91,7 @@ def sources(config: dict) -> list[SetSource]:
     seen = set()
     for raw in config.get("file_sets") or []:
         source = SetSource.parse(raw)
-        key = (source.identifier, source.archive, source.prefix)
+        key = (source.identifier, source.archive, source.prefix, source.platform is None)
         if key in seen:
             raise FileSetError(f"duplicate file_sets entry for {key!r}")
         seen.add(key)
@@ -169,6 +163,9 @@ def _get(http, url: str):
     except RuntimeError as exc:
         # The SDK forwards broker transport and size errors as RuntimeError.
         raise FileSetError(f"Archive.org broker request failed for {url}: {exc}") from exc
+    if response.status_code in (401, 403):
+        raise FileSetError(f"restricted access (HTTP {response.status_code}) for {url}; "
+                           "an authorized host-side Archive.org session may be required")
     if response.status_code != 200:
         raise FileSetError(f"Archive.org returned HTTP {response.status_code} for {url}")
     try:
@@ -193,6 +190,7 @@ class FileSets:
         if requested <= 0:
             raise FileSetError("max_set_files must be positive")
         self.max_files = requested
+        self._deadline = None
         self._cache: dict[str, list[dict]] = {}
         self._zip_cache: dict[tuple[str, str], list[dict]] = {}
         self._member_archives = {(source.identifier, source.archive)
@@ -200,11 +198,21 @@ class FileSets:
 
     def indexes_zip_members(self, identifier: str, name: str) -> bool:
         """Whether a parent ZIP is indexed as individual ROMs elsewhere."""
-        return (identifier, name) in self._member_archives
+        if not isinstance(name, str):
+            return False
+        return ((identifier, name) in self._member_archives or any(
+            source.identifier == identifier and source.archive is None
+            and source.platform is None and source.contains(name)
+            and name.lower().endswith(".zip") and within_depth(None, name) for source in self.configured))
+
+    def _check_budget(self):
+        if self._deadline is not None and time.monotonic() >= self._deadline:
+            raise FileSetError("automatic discovery time budget exhausted; use the census catalogue")
 
     def _files(self, identifier: str) -> list[dict]:
         if identifier in self._cache:
             return self._cache[identifier]
+        self._check_budget()
         base = METADATA + quote(identifier, safe="")
         metadata = _get(self.http, base + "/metadata").get("result")
         if not isinstance(metadata, dict) or not metadata:
@@ -226,6 +234,7 @@ class FileSets:
             )
         files = []
         for start in range(0, count, PAGE_SIZE):
+            self._check_budget()
             page = _get(self.http, f"{base}/files?start={start}&count={min(PAGE_SIZE, count-start)}")
             entries = page.get("result")
             if not isinstance(entries, list) or len(entries) != min(PAGE_SIZE, count-start):
@@ -237,6 +246,7 @@ class FileSets:
         return files
 
     def _zip_files(self, identifier: str, archive: str) -> list[dict]:
+        self._check_budget()
         key = (identifier, archive)
         if key in self._zip_cache:
             return self._zip_cache[key]
@@ -272,10 +282,37 @@ class FileSets:
     def resolve(self, identifier: str, archive: str | None,
                 name: str) -> SetSource | None:
         """Resolve from all mappings before filtering by platform."""
-        applicable = (s for s in self.configured
-                      if s.identifier == identifier and s.archive == archive
-                      and s.contains(name))
-        return max(applicable, key=lambda s: len(s.prefix), default=None)
+        explicit = [s for s in self.configured
+                    if s.identifier == identifier and s.archive == archive
+                    and s.platform is not None and s.contains(name)]
+        if explicit:
+            return max(explicit, key=lambda s: len(s.prefix))
+        automatic = [s for s in self.configured if s.identifier == identifier
+                     and s.platform is None and
+                     ((s.archive == archive and s.contains(name)) or
+                      (s.archive is None and archive is not None and s.contains(archive)))]
+        if not automatic or not within_depth(archive, name):
+            return None
+        platform = infer_platform(archive, name)
+        return SetSource(identifier, "", platform, archive) if platform else None
+
+    def automatic_archives(self, identifier: str) -> list[str]:
+        scopes = [s for s in self.configured if s.identifier == identifier
+                  and s.platform is None and s.archive is None]
+        return sorted({e["name"] for e in self._files(identifier)
+                       if _payload(e) and e["name"].lower().endswith(".zip")
+                       and within_depth(None, e["name"])
+                       and any(s.contains(e["name"]) for s in scopes)
+                       and (identifier, e["name"]) not in self._member_archives})
+
+    def skip_reason(self, identifier: str, archive: str | None, entry: dict) -> str:
+        name = entry.get("name", "") if isinstance(entry, dict) else ""
+        if _payload(entry) and any(s.identifier == identifier and s.platform is None
+                                   for s in self.configured):
+            if not within_depth(archive, name):
+                return "file exceeds automatic discovery folder depth 5"
+            return "file has no unambiguous platform label"
+        return "unsupported or out-of-scope file"
 
     @staticmethod
     def source_id(identifier: str, archive: str | None, name: str) -> str:
@@ -295,8 +332,6 @@ class FileSets:
         if not _payload(entry):
             return None
         name = entry["name"]
-        # A ZIP configured for member search is a container, not another game.
-        # Apply this in result() so live search and census cannot disagree.
         if archive is None and self.indexes_zip_members(identifier, name):
             return None
         source = self.resolve(identifier, archive, name)
@@ -319,10 +354,22 @@ class FileSets:
                        limit: int) -> SearchOutcome:
         if limit <= 0:
             return SearchOutcome([], [])
+        self._deadline = time.monotonic() + 20
         ranked = []
         unavailable = []
-        for (identifier, archive), choices in self.resources().items():
-            if platform and not any(s.platform == platform for s in choices):
+        resources = list(self.resources().items())
+        for identifier in sorted({s.identifier for s in self.configured
+                                  if s.platform is None and s.archive is None}):
+            try:
+                resources.extend(((identifier, archive), [SetSource(identifier, "", None, archive)])
+                                 for archive in self.automatic_archives(identifier))
+            except FileSetError as exc:
+                unavailable.append(f"{identifier}: {exc}")
+        for (identifier, archive), choices in resources:
+            if platform and not any(s.platform in (None, platform) for s in choices):
+                continue
+            if (archive and platform and all(s.platform is None for s in choices)
+                    and infer_platform(archive, "payload") not in (None, platform)):
                 continue
             try:
                 entries = (self._zip_files(identifier, archive) if archive
@@ -332,7 +379,13 @@ class FileSets:
                 continue
             for entry in entries:
                 result = self.result(identifier, archive, entry)
-                if result is None or (platform and result.platform != platform):
+                if result is None:
+                    if any(s.platform is None for s in choices) and _payload(entry) and not (archive is None and
+                            self.indexes_zip_members(identifier, entry["name"])):
+                        print(f"archive-org skipped {identifier}/{archive or ''}/{entry['name']}: "
+                              f"{self.skip_reason(identifier, archive, entry)}", file=sys.stderr)
+                    continue
+                if platform and result.platform != platform:
                     continue
                 name = entry["name"]
                 points = _score(name, query)
@@ -419,6 +472,7 @@ class FileSets:
         return selected
 
     def plan(self, result: SearchResult) -> FetchPlan:
+        self._deadline = None
         source_id = str(result.source_id or "")
         parts = source_id.split(":")
         if len(parts) == 3 and parts[0] == "set":
@@ -440,6 +494,8 @@ class FileSets:
         source = self.resolve(identifier, archive, name)
         if source is None:
             raise FileSetError(f"{name!r} is not in a configured file set")
+        if result.platform and source.platform != result.platform:
+            raise FileSetError(f"platform changed for {name!r}; search again before importing")
         entries = self._zip_files(identifier, archive) if archive else self._files(identifier)
         entry = next((entry for entry in entries
                       if isinstance(entry, dict) and entry.get("name") == name), None)
