@@ -199,6 +199,7 @@ class FileSets:
         self._deadline = None
         self._cache: dict[str, list[dict]] = {}
         self._zip_cache: dict[tuple[str, str], list[dict]] = {}
+        self._zip_views: dict[tuple[str, str], str] = {}
         self._member_archives = {(source.identifier, source.archive)
                                  for source in self.configured if source.archive}
 
@@ -277,6 +278,7 @@ class FileSets:
         except ZipListingError as exc:
             raise FileSetError(str(exc), status_code=exc.status_code) from exc
         self._zip_cache[key] = result
+        self._zip_views[key] = url
         return result
 
     def resources(self) -> dict[tuple[str, str | None], list[SetSource]]:
@@ -442,7 +444,8 @@ class FileSets:
                 for k in _BLOCKED) or
                 (_size(playlist) is not None and _size(playlist) > MAX_PLAYLIST_BYTES)):
             raise FileSetError(f"playlist {playlist_name!r} is blocked or too large")
-        url = self.file_url(identifier, archive, playlist_name)
+        url = (self._zip_views[(identifier, archive)] + "&file=" + quote(playlist_name, safe="")
+               if archive else self.file_url(identifier, archive, playlist_name))
         try:
             response = self.http.get(url)
         except RuntimeError as exc:

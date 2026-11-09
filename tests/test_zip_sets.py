@@ -53,12 +53,16 @@ class FakeHTTP:
                 for name in self.members
             )
             return Reply("<html><table>" + links + "</table></html>", self.zip_status)
+        if url.startswith(zip_url + "&file="):
+            member = unquote(url[len(zip_url + "&file="):])
+            if member in self.playlists:
+                return Reply(self.playlists[member])
         download_base = ("https://archive.org/download/" + self.identifier + "/" +
                          quote(self.archive, safe="/") + "/")
         if url.startswith(download_base):
             member = unquote(url[len(download_base):])
             if member in self.playlists:
-                return Reply(self.playlists[member])
+                return Reply("", 302)
         raise AssertionError(url)
 
 
@@ -81,6 +85,9 @@ class ZipSetTests(unittest.TestCase):
         plan = Importer(type("Ctx", (), {"http": http, "config": config})()).plan(results[0])
         self.assertEqual({f.filename for f in plan.files}, {game + ".chd", game + ".m3u"})
         self.assertEqual(plan.platform, "psx")
+        self.assertIn("https://ia800408.us.archive.org/view_archive.php?archive=/16/items/retro-roms-best-set/" +
+                      quote(archive, safe="/") + "&file=" + quote(game + ".m3u", safe=""),
+                      http.requests)
         self.assertEqual({f.url.rsplit("/", 1)[-1] for f in plan.files},
                          {quote(game + ".chd"), quote(game + ".m3u")})
 
