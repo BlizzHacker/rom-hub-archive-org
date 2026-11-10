@@ -357,7 +357,7 @@ Never put credentials in `file_sets`, URLs or manifests.
 | `collection` | `str` | `"Archive.org"` | RomM collection imported ROMs are grouped into |
 | `downloadable_only` | `bool` | `false` | drop `stream_only` items from search — for bulk importing, where seeing items the importer will refuse is noise |
 | `max_rows` | `int` | `50000` | ceiling on a single bulk request, so a typo cannot ask Archive.org for a million rows |
-| `file_sets` | `list[str]` | `["retro-roms-best-set", "tiny-best-set-go"]` | Items whose files and ZIP members are searched and catalogued; `[]` disables file-set search |
+| `file_sets` | `list[str]` | `["retro-roms-best-set", "tiny-best-set-go"]` | Items whose files and ZIP members are searched live; `[]` disables file-set search |
 | `max_set_files` | `int` | `8000` | Maximum entries per item manifest or ZIP listing |
 
 ### File-set discovery
@@ -405,26 +405,18 @@ Inner game ZIPs remain downloadable payloads. Raw BIN/CUE/GDI groups remain
 unsupported. A matching adjacent M3U must name safe, existing sibling images;
 planning includes exactly that playlist and its referenced images.
 
-Run `rom-hub census build archive-org` after upgrading or changing sources or
-platform aliases. Automatic items are resumable census units; scope discovery
-does not fetch ZIP listings. ZIP coverage has no independent denominator and
-is reported as unknown. Counts represent entries, not unique games.
-
 HTTP 401/403 and unreadable listings are controlled resource failures. Access
 may require an authorized Archive.org session in the host; a browser login
 does not authenticate the host. This plugin does not store credentials. Live
 search preserves accessible matches and writes partial failures to plugin
 diagnostics. If no matches survive a failed resource, search reports a source
 error. The current host does not display partial plugin warnings alongside
-successful results. HTTP 403 stops further ZIP probes for that item. Other archive errors allow
-census discovery to continue, retaining an incomplete unit and an error summary.
-Restricted census units remain incomplete and their
-errors appear in the report; other units continue. A readable listing does
-not guarantee a later download will be authorized.
+successful results. HTTP 403 stops further ZIP probes for that item. A readable
+listing does not guarantee a later download will be authorized.
 
 Broad live searches have a 20-second discovery budget checked between listing
-requests, in addition to the host's HTTP and execution limits. Use the census
-for repeated searches; a slow individual request can still reach host limits.
+requests, in addition to the host's HTTP and execution limits. A slow individual
+request can still reach host limits.
 
 ### Host authentication
 
@@ -434,37 +426,15 @@ that support `rom-hub auth` can authenticate standalone CLI requests:
     rom-hub auth login archive-org
     rom-hub auth status archive-org
 
-Use the same `ROM_HUB_HOME` and secret-store settings for login, search, census
+Use the same `ROM_HUB_HOME` and secret-store settings for login, live search
 and import. Existing hosts without this command need an authenticated host HTTP
 adapter; a browser login alone is insufficient. This plugin remains compatible
 with anonymous hosts and stores no credentials.
 
 The host may renew and retry a 401/403 once. If the final response is still
-403, this plugin stops further ZIP probes for the affected item and reports its
-census unit as incomplete. Authentication does not guarantee item access.
-
-### Checking the catalogue
-
-Use the installed revision and effective configuration you intend to test:
-
-    rom-hub plugin config archive-org
-    rom-hub census build archive-org --units --verbose
-    rom-hub census report archive-org --units
-    rom-hub search "Crisis Core" --platform psp --all-variants
-    rom-hub search "Crisis Core" --platform psp --all-variants --live
-    rom-hub search "Final Fantasy VIII" --platform psx --all-variants
-    rom-hub search "Final Fantasy VIII" --platform psx --all-variants --live
-
-Inspect unit failures and skip reasons, and confirm the ordinary search says
-it answered from a built catalogue. Search can fall back to live results;
-results alone do not prove that the catalogue contains the game. Unknown ZIP
-coverage and restricted units must not be described as verified completeness.
-The initial census also enumerates `census_collection` and can take minutes.
-
-ROMarr currently calls live plugin search rather than consuming this CLI
-catalogue. Test its installed plugin, service account, `ROM_HUB_HOME` and
-host session separately. A correct fetch plan proves the chosen URLs and
-platform; only an authorized download verifies access to the payload.
+403, this plugin stops further ZIP probes for the affected item. Authentication
+does not guarantee item access. Check file-set results with `rom-hub search
+"Crisis Core" --platform psp --live --all-variants`; ROMarr also searches live.
 
 ## How the importer routes
 

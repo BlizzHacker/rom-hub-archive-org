@@ -97,8 +97,6 @@ distinct-game counts should know why.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import time
 from contextlib import contextmanager
 
@@ -114,9 +112,6 @@ from .index import (
     size_window,
 )
 from .platforms import platform_for
-from .set_platforms import ALIASES, MAX_FOLDER_DEPTH
-from .file_sets import FileSets, FileSetError, PAGE_SIZE as SET_PAGE_SIZE, METADATA as SET_METADATA, _get
-from urllib.parse import quote
 
 #: The collection this census is for. Configurable, because the partition
 #: is a property of `item_size` and not of `softwarelibrary` -- but the
@@ -217,12 +212,6 @@ SKIP_SUB_COLLECTION = (
 )
 SKIP_NO_IDENTIFIER = "the search index returned a document with no identifier"
 SKIP_UNREPRESENTABLE = "the item's metadata would not fit a catalogue record"
-SKIP_SET_EXCLUDED = "not a supported or safely named ROM within this file-set scope"
-SKIP_SET_PARENT_ZIP = "ZIP container indexed separately as individual ROM members"
-SKIP_SET_UNREPRESENTABLE = "file-set source identity or record exceeds SDK limits"
-SET_PAGE_ROWS = min(SET_PAGE_SIZE, 400)
-ZIP_PAGE_ROWS = 300
-
 SKIP_VANISHED = (
     "counted in the window but gone from the index by the time the window "
     "was read -- the collection changes while it is being read"
@@ -231,10 +220,6 @@ SKIP_VANISHED = (
 
 class CensusUnavailable(Exception):
     """A window could not be read, and the message says which part."""
-    def __init__(self, message, *, status_code=None):
-        super().__init__(message)
-        self.status_code = status_code
-
 
 
 @contextmanager
@@ -313,7 +298,7 @@ class Census(CensusProvider):
                 CensusUnit(
                     unit_id=size_clause(low, high),
                     label=(
-                        f"Archive.org items: item_size {low:,} to "
+                        f"item_size {low:,} to "
                         f"{'unbounded' if high == OPEN else format(high, ',')} "
                         f"bytes -- window {position} of {len(edges)} over a "
                         f"collection of {declared:,} items"
@@ -333,197 +318,7 @@ class Census(CensusProvider):
                     include=True,
                 )
             )
-        # Group folder mappings of a resource into one unit so overlapping
-        # prefixes never count the same member twice. Scope performs no
-        # file-listing work: one bad ZIP must not defeat other units.
-        for unit_id, identifier, archive in self._file_units():
-            units.append(CensusUnit(
-                unit_id=unit_id,
-                label=(("Archive.org ZIP member entries: " + identifier + "/" + archive)
-                       if archive else ("Archive.org direct file entries: " + identifier))[:500],
-                kind="roms",
-                declared_total=None,
-                platform=None,  # A unit may contain multiple platform folders.
-                include=True,
-            ))
         return units
-
-    def _file_units(self) -> list[tuple[str, str, str | None]]:
-        file_sets = FileSets(self.ctx.http, self.ctx.config or {})
-        units = []
-        for (identifier, archive), choices in file_sets.resources().items():
-            mapping = sorted(((source.prefix, source.platform) for source in choices),
-                             key=lambda pair: (pair[0], pair[1] or ""))
-            canonical = json.dumps([identifier, archive, mapping, sorted(ALIASES.items()), MAX_FOLDER_DEPTH],
-                                   ensure_ascii=True, separators=(",", ":"))
-            digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-            units.append(("file-set:" + digest, identifier, archive))
-        return sorted(units)
-
-    def _automatic_page(self, unit, identifier, cursor):
-        sets = FileSets(self.ctx.http, self.ctx.config or {})
-        try:
-            archives = [None] + sets.automatic_archives(identifier)
-            fingerprint = hashlib.sha256(json.dumps(
-                [archives, [e.get("name") for e in sets._files(identifier)
-                            if isinstance(e, dict)]]).encode()).hexdigest()[:24]
-            position, inner = 0, None
-            failures, first_error = 0, ""
-            if cursor is not None:
-                try:
-                    saved = json.loads(cursor)
-                    position, inner, previous = saved[:3]
-                    if len(saved) == 5:
-                        failures, first_error = saved[3:]
-                        if type(failures) is not int or failures < 0 or not isinstance(first_error, str):
-                            raise ValueError("invalid failure summary")
-                    elif len(saved) != 3:
-                        raise ValueError("invalid cursor fields")
-                    if inner is not None and not isinstance(inner, str):
-                        raise ValueError("invalid inner cursor")
-                    if type(position) is not int or not 0 <= position <= len(archives):
-                        raise ValueError("invalid archive position")
-                    if previous != fingerprint:
-                        raise ValueError("archive manifest changed; rebuild this unit")
-                except (ValueError, TypeError) as exc:
-                    raise CensusUnavailable(f"invalid automatic discovery cursor: {exc}") from exc
-            if position == len(archives):
-                raise CensusUnavailable(f"{identifier}: {failures} archive failures; first: {first_error}")
-            try:
-                page = self._file_page(unit, inner, _resource=(identifier, archives[position]))
-            except CensusUnavailable as exc:
-                if archives[position] is None or exc.status_code == 403:
-                    raise
-                failures += 1
-                first_error = first_error or str(exc)[:150]
-                page = CensusPage(records=[], cursor=None, declared_total=None)
-
-            if page.cursor is None:
-                position += 1
-            next_cursor = (json.dumps([position, page.cursor, fingerprint, failures, first_error], separators=(",", ":"))
-                           if position < len(archives) or failures else None)
-            return CensusPage(records=page.records, skipped=page.skipped,
-                              cursor=next_cursor, declared_total=None)
-        except FileSetError as exc:
-            raise CensusUnavailable(f"Archive.org automatic item {identifier}: {exc}") from exc
-
-    def _file_page(self, unit: CensusUnit, cursor: str | None, _resource=None) -> CensusPage:
-        resources = {key: (item, archive)
-                     for key, item, archive in self._file_units()}
-        if unit.unit_id not in resources:
-            raise CensusUnavailable(
-                f"file-set unit {unit.unit_id!r} is no longer configured; rebuild the catalogue")
-        identifier, archive = _resource or resources[unit.unit_id]
-        configured = FileSets(self.ctx.http, self.ctx.config or {})
-        if (_resource is None and archive is None and any(
-                source.identifier == identifier and source.archive is None
-                and source.platform is None for source in configured.configured)):
-            return self._automatic_page(unit, identifier, cursor)
-        sets = FileSets(self.ctx.http, self.ctx.config or {})
-        try:
-            if archive is not None:
-                # ZIP View Contents exposes links but no independent member
-                # denominator. Never report our filtered list as a verified
-                # declared count. The fingerprint detects shifted pagination.
-                entries = sorted(sets._zip_files(identifier, archive),
-                                 key=lambda e: e["name"])
-                fingerprint = hashlib.sha256(
-                    json.dumps([e["name"] for e in entries],
-                               ensure_ascii=True).encode("utf-8")
-                ).hexdigest()[:24]
-                offset = 0
-                if cursor is not None:
-                    try:
-                        offset_text, previous = cursor.split("|", 1)
-                        offset = int(offset_text)
-                    except (TypeError, ValueError) as exc:
-                        raise CensusUnavailable("invalid ZIP file-set cursor") from exc
-                    if fingerprint != previous:
-                        raise CensusUnavailable(
-                            f"ZIP member list changed for {identifier}/{archive}; rebuild this unit")
-                if offset < 0 or offset > len(entries):
-                    raise CensusUnavailable("ZIP file-set cursor outside manifest")
-                page = entries[offset:offset + ZIP_PAGE_ROWS]
-                next_offset = offset + len(page)
-                next_cursor = (f"{next_offset}|{fingerprint}"
-                               if next_offset < len(entries) else None)
-                declared = None  # no independent ZIP member total
-            else:
-                base = SET_METADATA + quote(identifier, safe="")
-                metadata = _get(self.ctx.http, base + "/metadata").get("result")
-                if not isinstance(metadata, dict) or not metadata:
-                    raise FileSetError(f"Archive.org item {identifier!r} has no metadata")
-                collections = metadata.get("collection") or []
-                if isinstance(collections, str):
-                    collections = [collections]
-                if "stream_only" in collections:
-                    raise FileSetError(f"Archive.org item {identifier!r} is stream-only")
-                count = _get(self.ctx.http, base + "/files_count").get("result")
-                if type(count) is not int or count < 0 or count > sets.max_files:
-                    raise FileSetError(
-                        f"invalid or excessive file count for {identifier!r}: {count!r}")
-                offset = 0
-                if cursor is not None:
-                    try:
-                        offset_text, expected_text = cursor.split("|", 1)
-                        offset = int(offset_text)
-                        expected = int(expected_text)
-                    except (TypeError, ValueError) as exc:
-                        raise CensusUnavailable("invalid direct file-set cursor") from exc
-                    if expected != count:
-                        raise CensusUnavailable(
-                            f"file count changed for {identifier!r}: {expected} to {count}")
-                if offset < 0 or offset > count:
-                    raise CensusUnavailable("direct file-set cursor outside manifest")
-                take = min(SET_PAGE_ROWS, count - offset)
-                page = []
-                if take:
-                    response = _get(
-                        self.ctx.http, f"{base}/files?start={offset}&count={take}")
-                    page = response.get("result")
-                    if not isinstance(page, list) or len(page) != take:
-                        raise FileSetError(
-                            f"incomplete manifest for {identifier!r} at offset {offset}")
-                next_offset = offset + take
-                next_cursor = (f"{next_offset}|{count}"
-                               if next_offset < count else None)
-                declared = count
-
-            records: list[CensusRecord] = []
-            skipped: dict[str, int] = {}
-            for entry in page:
-                result = sets.result(identifier, archive, entry)
-                reason = None
-                if result is None:
-                    reason = (SKIP_SET_PARENT_ZIP
-                              if archive is None and isinstance(entry, dict)
-                              and sets.indexes_zip_members(identifier, entry.get("name"))
-                              else sets.skip_reason(identifier, archive, entry)
-                              if any(source.platform is None for source in sets.configured)
-                              else SKIP_SET_EXCLUDED)
-                elif len(result.source_id) > 600 or len(result.title) > 500:
-                    reason = SKIP_SET_UNREPRESENTABLE
-                else:
-                    try:
-                        records.append(CensusRecord(
-                            record_id=result.source_id,
-                            title=result.title,
-                            platform=result.platform,
-                            size_bytes=result.size_bytes,
-                            url=result.url,
-                            extra=result.extra,
-                        ))
-                    except (TypeError, ValueError):
-                        reason = SKIP_SET_UNREPRESENTABLE
-                if reason:
-                    skipped[reason] = skipped.get(reason, 0) + 1
-            return CensusPage(records=records, cursor=next_cursor,
-                              declared_total=declared, skipped=skipped)
-        except FileSetError as exc:
-            raise CensusUnavailable(
-                f"Archive.org file-set {identifier}/{archive or '(direct files)'}: {exc}",
-                status_code=exc.status_code
-            ) from exc
 
     # -- walking --------------------------------------------------------
 
@@ -538,8 +333,6 @@ class Census(CensusProvider):
         result set that has shifted under you is how a walk silently skips
         rows.
         """
-        if unit.unit_id.startswith("file-set:"):
-            return self._file_page(unit, cursor)
         low, high = _parse_unit_id(unit.unit_id)
         resume, seen, declared = _parse_cursor(cursor, low)
 
