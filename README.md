@@ -326,8 +326,8 @@ verified live.
 
 ## Shared host authentication
 
-[ROM Hub's shared authentication](https://github.com/dgmora/rom-hub/pull/1)
-supports the standalone CLI and [ROMarr's UI](https://github.com/dgmora/romarr/pull/6).
+[ROM Hub's shared authentication](https://github.com/BlizzHacker/rom-hub)
+supports the standalone CLI and [ROMarr's UI](https://github.com/BlizzHacker/romarr).
 Use `rom-hub auth login archive-org` in your CLI environment, or enter credentials
 in ROMarr's installed Archive.org plugin card. External secret files use
 `ROM_HUB_ARCHIVE_ORG_EMAIL_FILE` and `ROM_HUB_ARCHIVE_ORG_PASSWORD_FILE`;
@@ -345,7 +345,7 @@ Never put credentials in `file_sets`, URLs or manifests.
 
 ## Install
 
-    rom-hub plugin install https://github.com/<you>/rom-hub-archive-org --ref v0.4.0
+    rom-hub plugin install https://github.com/BlizzHacker/rom-hub-archive-org --ref v0.4.1
     rom-hub search sonic --platform genesis
     rom-hub import archive-org Sonic_The_Hedgehog_W_REV01_h1C
 

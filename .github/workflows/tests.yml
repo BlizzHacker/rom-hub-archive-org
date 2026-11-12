@@ -2,7 +2,7 @@ name: Plugin regression tests
 
 on:
   push:
-    branches: [integration]
+    branches: [main]
   pull_request:
 
 jobs:
