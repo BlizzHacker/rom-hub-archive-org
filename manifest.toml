@@ -1,7 +1,7 @@
 [plugin]
 slug        = "archive-org"
 name        = "Archive.org"
-version     = "0.4.0"
+version     = "0.4.1"
 rpp_version = "1"
 license     = "MIT"
 
@@ -21,6 +21,8 @@ collections       = { type = "list[str]", default = ["softwarelibrary", "console
 collection        = { type = "str", default = "Archive.org" }
 downloadable_only = { type = "bool", default = false }
 max_rows          = { type = "int", default = 50000 }
+file_sets         = { type = "list[str]", default = ["retro-roms-best-set", "tiny-best-set-go"] }
+max_set_files     = { type = "int", default = 8000 }
 # One collection, not the search scope's list: a census partitions a
 # single collection by item_size and reconciles its windows against that
 # collection's own numFound. Two collections would need two partitions and

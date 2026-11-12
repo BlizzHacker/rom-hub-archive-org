@@ -324,6 +324,25 @@ still works. Terms are quoted, which makes Lucene's operators literal — real
 titles like `r-type` and `sonic & knuckles` need no special handling and were
 verified live.
 
+## Shared host authentication
+
+[ROM Hub's shared authentication](https://github.com/dgmora/rom-hub/pull/1)
+supports the standalone CLI and [ROMarr's UI](https://github.com/dgmora/romarr/pull/6).
+Use `rom-hub auth login archive-org` in your CLI environment, or enter credentials
+in ROMarr's installed Archive.org plugin card. External secret files use
+`ROM_HUB_ARCHIVE_ORG_EMAIL_FILE` and `ROM_HUB_ARCHIVE_ORG_PASSWORD_FILE`;
+legacy `ROMARR_ARCHIVE_ORG_*` names remain supported.
+
+Credentials use the existing ROM Hub secret store or external files. Cookies
+stay in host memory and authenticate listings, fresh plans and selected payloads.
+The plugin receives neither credentials nor cookies through its protocol.
+The sandbox does not prevent malicious plugins reading same-user files; a file
+store key beside its ciphertext protects against accidental disclosure only.
+No `ia.ini` or IA CLI is required. CLI and service state are separate unless
+configured with the same home and store settings. A login does not override
+item restrictions; an authenticated live download remains unverified.
+Never put credentials in `file_sets`, URLs or manifests.
+
 ## Install
 
     rom-hub plugin install https://github.com/<you>/rom-hub-archive-org --ref v0.4.0
@@ -338,6 +357,84 @@ verified live.
 | `collection` | `str` | `"Archive.org"` | RomM collection imported ROMs are grouped into |
 | `downloadable_only` | `bool` | `false` | drop `stream_only` items from search — for bulk importing, where seeing items the importer will refuse is noise |
 | `max_rows` | `int` | `50000` | ceiling on a single bulk request, so a typo cannot ask Archive.org for a million rows |
+| `file_sets` | `list[str]` | `["retro-roms-best-set", "tiny-best-set-go"]` | Items whose files and ZIP members are searched live; `[]` disables file-set search |
+| `max_set_files` | `int` | `8000` | Maximum entries per item manifest or ZIP listing |
+
+### File-set discovery
+
+An item identifier enables automatic discovery of its supported direct files
+and ZIP members. Platform labels in directory and archive names, such as
+`PS`, `FC`, `Sony - PS1 (A-L).zip` and `Sony - PSP (A-G).zip`, assign the
+platform. The shared aliases are in `archive_org/set_platforms.py`.
+Conflicting or unknown labels are skipped; generic extensions and game titles
+are not platform evidence. Search matches the individual filename, without
+resolving a canonical game database ID.
+
+The two default items are already enabled on a fresh installation. Optional
+custom lists use comma-separated CLI values, for example:
+
+    rom-hub plugin config archive-org --set 'file_sets=another-item,another-item/PS:psx'
+
+ROM Hub preserves saved configuration during upgrades, including an empty
+list that disables discovery. To restore this field from the installed
+manifest defaults without naming the sets manually (also works in fish):
+
+```sh
+python -c '
+from rom_hub.cli import default_root
+from rom_hub.registry import Registry
+registry = Registry(default_root())
+plugin = registry.get("archive-org")
+config = dict(plugin.config)
+config["file_sets"] = plugin.manifest.config_schema["file_sets"]["default"]
+registry.set_config(plugin.slug, config)
+print("Restored file_sets:", config["file_sets"])
+'
+```
+
+Entries may also scope discovery to a folder or ZIP, for example
+`item/folder/games.zip/Roms`. An explicit `:platform` suffix overrides automatic
+assignment for that scope, such as `item/games.zip/Roms/PS:psx`. Existing
+explicit mappings retain their behavior and use the longest matching scope.
+
+Automatic discovery accepts five directory levels in total, counting folders
+before and inside a ZIP, excluding the item and archive/payload filenames.
+It inspects one ZIP boundary using Archive.org's View Contents listing; it
+does not download the whole ZIP to index it or open archives inside ZIPs.
+Inner game ZIPs remain downloadable payloads. Raw BIN/CUE/GDI groups remain
+unsupported. A matching adjacent M3U must name safe, existing sibling images;
+planning includes exactly that playlist and its referenced images.
+
+HTTP 401/403 and unreadable listings are controlled resource failures. Access
+may require an authorized Archive.org session in the host; a browser login
+does not authenticate the host. This plugin does not store credentials. Live
+search preserves accessible matches and writes partial failures to plugin
+diagnostics. If no matches survive a failed resource, search reports a source
+error. The current host does not display partial plugin warnings alongside
+successful results. HTTP 403 stops further ZIP probes for that item. A readable
+listing does not guarantee a later download will be authorized.
+
+Broad live searches have a 20-second discovery budget checked between listing
+requests, in addition to the host's HTTP and execution limits. A slow individual
+request can still reach host limits.
+
+### Host authentication
+
+Authentication is supplied by the host, outside plugin configuration. Hosts
+that support `rom-hub auth` can authenticate standalone CLI requests:
+
+    rom-hub auth login archive-org
+    rom-hub auth status archive-org
+
+Use the same `ROM_HUB_HOME` and secret-store settings for login, live search
+and import. Existing hosts without this command need an authenticated host HTTP
+adapter; a browser login alone is insufficient. This plugin remains compatible
+with anonymous hosts and stores no credentials.
+
+The host may renew and retry a 401/403 once. If the final response is still
+403, this plugin stops further ZIP probes for the affected item. Authentication
+does not guarantee item access. Check file-set results with `rom-hub search
+"Crisis Core" --platform psp --live --all-variants`; ROMarr also searches live.
 
 ## How the importer routes
 

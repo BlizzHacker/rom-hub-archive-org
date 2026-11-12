@@ -42,6 +42,7 @@ from urllib.parse import quote
 from rom_hub_sdk import FetchFile, FetchPlan, ImportProvider, SearchResult
 
 from .platforms import platform_for
+from .file_sets import FileSets
 
 METADATA = "https://archive.org/metadata/"
 DOWNLOAD = "https://archive.org/download/"
@@ -89,6 +90,11 @@ class Importer(ImportProvider):
         identifier = (result.source_id or "").strip()
         if not identifier:
             raise ImportRefused("the search result carries no Archive.org identifier")
+        if identifier.startswith(("set:", "zip:")):
+            # File-set results are explicit item+filename references. The
+            # planner revalidates the exact file against Archive.org before
+            # returning a one-file direct HTTP plan.
+            return FileSets(self.ctx.http, self.ctx.config or {}).plan(result)
 
         item = self._metadata(identifier)
         metadata = item.get("metadata")
